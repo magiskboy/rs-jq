@@ -1,87 +1,35 @@
-use std::{error::Error, fmt::Display};
-
-use crate::json::error::JsonParserError;
+use crate::json::{
+    error::JsonParserError,
+    escape::{ESCAPE_TOKENS, MUST_BE_ESCAPED},
+    token::{JsonToken, JsonTokenKind, Span},
+};
+use crate::source::Source;
 
 #[derive(Debug, Clone)]
 pub struct Lexer<'a> {
-    pub state: LexerState,
-    pub index: usize,
-    pub source: &'a str,
+    index: usize,
+    source: Source<'a>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
+// support -1.2e-3
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum ParseNumberState {
+    Start,
+    Signed,
+    Integer,
+    StartDecimal,
+    InDecimal,
+    StartExp, // at E or e
+    ExpSign,
+    ExpValue,
+    OnError,
+    OnSeparator,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JsonTokenKind {
-    LBrace,
-    RBrace,
-    LBracket,
-    RBracket,
-    String,
-    Number,
-    True,
-    False,
-    Null,
-    Colon,
-    Comma,
-    Whitespace,
-    InvalidToken,
-    Stop,
-}
-
-impl Display for JsonTokenKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            JsonTokenKind::LBrace => write!(f, "LBrace"),
-            JsonTokenKind::RBrace => write!(f, "RBrace"),
-            JsonTokenKind::LBracket => write!(f, "LBracket"),
-            JsonTokenKind::RBracket => write!(f, "RBracket"),
-            JsonTokenKind::String => write!(f, "String"),
-            JsonTokenKind::Number => write!(f, "Number"),
-            JsonTokenKind::True => write!(f, "True"),
-            JsonTokenKind::False => write!(f, "False"),
-            JsonTokenKind::Null => write!(f, "Null"),
-            JsonTokenKind::Colon => write!(f, "Colon"),
-            JsonTokenKind::Comma => write!(f, "Comma"),
-            JsonTokenKind::Whitespace => write!(f, "Whitespace"),
-            JsonTokenKind::InvalidToken => write!(f, "InvalidToken"),
-            JsonTokenKind::Stop => write!(f, "Stop"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JsonToken {
-    pub kind: JsonTokenKind,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LexerState {
-    NewToken,
-    InString(Span),
-    InNumber(Span),
-    InTrue(Span),
-    InFalse(Span),
-    InNull(Span),
-    Invalid((String, Span)),
-}
-
-const TRUE_LITERAL: &str = "true";
-const FALSE_LITERAL: &str = "false";
-const NULL_LITERAL: &str = "null";
-const ESCAPE_TOKENS: [&str; 8] = ["\\\"", "\\\\", "\\/", "\\b", "\\f", "\\n", "\\r", "\\t"];
-const SEPARATORS_LITERALS: [char; 11] = ['{', '}', ':', ',', ']', '[', ' ', ' ', '\n', '\t', '\r'];
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
-            state: LexerState::NewToken,
-            source,
+            source: Source::new(source),
             index: 0,
         }
     }
@@ -97,7 +45,7 @@ impl<'a> Lexer<'a> {
             });
         }
 
-        let c = self.source.chars().nth(self.index).unwrap();
+        let c = self.source.char_at(self.index).unwrap();
         let pos = self.index;
         let (token, next_index) = match c {
             '{' => (
@@ -171,9 +119,9 @@ impl<'a> Lexer<'a> {
                 pos + 1,
             ),
             '"' => self.parse_string()?,
-            't' => self.parse_true()?,
-            'f' => self.parse_false()?,
-            'n' => self.parse_null()?,
+            't' => self.parse_literal(JsonTokenKind::True)?,
+            'f' => self.parse_literal(JsonTokenKind::False)?,
+            'n' => self.parse_literal(JsonTokenKind::Null)?,
             '0'..='9' | '-' => self.parse_number()?,
             _ => (
                 JsonToken {
@@ -197,106 +145,180 @@ impl<'a> Lexer<'a> {
         Ok(token)
     }
 
-    fn parse_true(&self) -> Result<(JsonToken, usize), JsonParserError> {
-        let span = self.get_candicate_span(self.index);
+    fn parse_literal(
+        &self,
+        token_type: JsonTokenKind,
+    ) -> Result<(JsonToken, usize), JsonParserError> {
+        let s = match token_type {
+            JsonTokenKind::True => "true",
+            JsonTokenKind::False => "false",
+            JsonTokenKind::Null => "null",
+            _ => "",
+        };
+        let err = Err(JsonParserError::LexicalError(String::from(
+            "invalid literal",
+        )));
+        if s.is_empty() {
+            return err;
+        }
 
-        if self.get_str(&span) == Some(TRUE_LITERAL) {
+        let span = Span {
+            start: self.index,
+            end: self.index + s.len(),
+        };
+
+        if self.get_str(&span) == Some(s) {
             return Ok((
                 JsonToken {
-                    kind: JsonTokenKind::True,
+                    kind: token_type,
                     span,
                 },
                 span.end,
             ));
         }
-        Err(JsonParserError::LexicalError(String::from(
-            "Invalid character",
-        )))
+
+        err
     }
 
-    fn parse_false(&self) -> Result<(JsonToken, usize), JsonParserError> {
-        let span = self.get_candicate_span(self.index);
-
-        if self.get_str(&span) == Some(FALSE_LITERAL) {
-            return Ok((
-                JsonToken {
-                    kind: JsonTokenKind::False,
-                    span,
-                },
-                span.end,
-            ));
-        }
-        Err(JsonParserError::LexicalError(String::from(
-            "Invalid character",
-        )))
-    }
-
-    fn parse_null(&self) -> Result<(JsonToken, usize), JsonParserError> {
-        let span = self.get_candicate_span(self.index);
-
-        if self.get_str(&span) == Some(NULL_LITERAL) {
-            return Ok((
-                JsonToken {
-                    kind: JsonTokenKind::Null,
-                    span,
-                },
-                span.end,
-            ));
-        }
-        Err(JsonParserError::LexicalError(String::from(
-            "Invalid character",
-        )))
+    fn has_leading_zero(value: &str) -> bool {
+        let int_part = value.strip_prefix('-').unwrap_or(value);
+        matches!(int_part.as_bytes(), [b'0', b'0'..=b'9', ..])
     }
 
     fn parse_number(&self) -> Result<(JsonToken, usize), JsonParserError> {
-        let span = self.get_candicate_span(self.index);
+        /*
+         * Follow this Finite state machine to implement JSON number validation
+         *
+         * state = 0: in start
+         * state = 1: in signed
+         * state = 2: in interger
+         * state = 3: at dot
+         * state = 4: after dot
+         * state = 5: at e
+         * state = 6: dec sign
+         * state = 7: dec value
+         */
 
-        match self.get_str(&span) {
-            Some(value) => {
-                if Self::validate_json_number(value) {
-                    return Ok((
-                        JsonToken {
-                            kind: JsonTokenKind::Number,
-                            span,
-                        },
-                        span.end,
-                    ));
+        if Self::has_leading_zero(self.source.data) {
+            return Err(JsonParserError::LexicalError(String::from(
+                "invalid number",
+            )));
+        }
+
+        let mut span = Span {
+            start: self.index,
+            end: self.index,
+        };
+        let value = self
+            .source
+            .slice_at(self.index)
+            .ok_or(JsonParserError::ParserError(String::from("invalid number")))?;
+
+        let mut state: ParseNumberState = ParseNumberState::Start;
+        for c in value.chars() {
+            let next_state = match c {
+                '-' => match state {
+                    ParseNumberState::Start => ParseNumberState::Signed,
+                    ParseNumberState::StartExp => ParseNumberState::ExpSign,
+                    _ => ParseNumberState::OnError,
+                },
+                '0'..='9' => match state {
+                    ParseNumberState::Start
+                    | ParseNumberState::Signed
+                    | ParseNumberState::Integer => ParseNumberState::Integer,
+                    ParseNumberState::StartDecimal | ParseNumberState::InDecimal => {
+                        ParseNumberState::InDecimal
+                    }
+                    ParseNumberState::StartExp
+                    | ParseNumberState::ExpSign
+                    | ParseNumberState::ExpValue => ParseNumberState::ExpValue,
+                    _ => ParseNumberState::OnError,
+                },
+                '.' => match state {
+                    ParseNumberState::Integer => ParseNumberState::StartDecimal,
+                    _ => ParseNumberState::OnError,
+                },
+                'e' | 'E' => match state {
+                    ParseNumberState::InDecimal | ParseNumberState::Integer => {
+                        ParseNumberState::StartExp
+                    }
+                    _ => ParseNumberState::OnError,
+                },
+                '+' => match state {
+                    ParseNumberState::StartExp => ParseNumberState::ExpSign,
+                    _ => ParseNumberState::OnError,
+                },
+                '{' | '}' | '[' | ']' | ',' | ' ' | ':' | '\r' | '\t' | '\n' => {
+                    ParseNumberState::OnSeparator
                 }
+                _ => ParseNumberState::OnError,
+            };
 
-                return Err(JsonParserError::LexicalError(String::from(
-                    "invalid number",
-                )));
+            match next_state {
+                ParseNumberState::OnError | ParseNumberState::OnSeparator => break,
+                _ => {
+                    state = next_state;
+                    span.end += 1;
+                }
             }
+        }
 
-            None => {
-                return Err(JsonParserError::LexicalError(String::from(
-                    "Invalid number",
-                )));
-            }
+        match state {
+            ParseNumberState::OnSeparator
+            | ParseNumberState::InDecimal
+            | ParseNumberState::Integer
+            | ParseNumberState::ExpValue => Ok((
+                JsonToken {
+                    kind: JsonTokenKind::Number,
+                    span,
+                },
+                span.end,
+            )),
+            _ => Err(JsonParserError::LexicalError(String::from(
+                "invalid number",
+            ))),
         }
     }
 
+    fn must_be_escaped(ch: char) -> bool {
+        let mut buf = [0u8; 4];
+        let encoded: &str = ch.encode_utf8(&mut buf);
+        MUST_BE_ESCAPED.contains(&encoded)
+    }
+
     fn parse_string(&mut self) -> Result<(JsonToken, usize), JsonParserError> {
-        let mut n_backslash = 0;
-        for i in (self.index + 1)..self.source.len() {
-            let c = self.source.chars().nth(i).unwrap();
-            if c == '\\' {
-                n_backslash += 1;
-            }
-            if c == '"'
-                && (self.source.chars().nth(i - 1).unwrap() != '\\'
-                    || (self.source.chars().nth(i - 1).unwrap() == '\\' && n_backslash % 2 == 0))
-            {
+        let source = self.source;
+        let mut idx = self.index + 1;
+
+        while idx < source.len() {
+            let c = source.char_at(idx);
+            if c == Some('\\') {
+                let escape = source
+                    .slice(idx, idx + 2)
+                    .filter(|s| ESCAPE_TOKENS.contains(s))
+                    .or_else(|| {
+                        source
+                            .slice(idx, idx + 6)
+                            .filter(|s| Self::is_hex_escape(s))
+                    });
+                let Some(s) = escape else { break };
+                idx += s.len();
+                continue;
+            } else if c == Some('"') {
                 return Ok((
                     JsonToken {
                         kind: JsonTokenKind::String,
                         span: Span {
                             start: self.index,
-                            end: i + 1,
+                            end: idx + 1,
                         },
                     },
-                    i + 1,
+                    idx + 1,
                 ));
+            } else if c.is_some_and(Self::must_be_escaped) {
+                break;
+            } else {
+                idx += 1;
             }
         }
 
@@ -305,104 +327,34 @@ impl<'a> Lexer<'a> {
         )))
     }
 
-    pub fn parse(&mut self) -> Result<Vec<JsonToken>, JsonParserError> {
+    fn is_hex_escape(value: &str) -> bool {
+        value.len() == 6
+            && value.starts_with("\\u")
+            && value
+                .get(2..)
+                .unwrap()
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+    }
+
+    pub fn tokenize(source: &'a str) -> Result<Vec<JsonToken>, JsonParserError> {
+        let mut lexer = Self::new(source);
         let mut tokens: Vec<JsonToken> = vec![];
 
         loop {
-            let token = self.next_token()?;
-            if token.kind == JsonTokenKind::Whitespace {
-                continue;
+            let token = lexer.next_token()?;
+            match token.kind {
+                JsonTokenKind::Stop => break,
+                JsonTokenKind::Whitespace => continue,
+                _ => tokens.push(token),
             }
-            if token.kind == JsonTokenKind::Stop {
-                break;
-            }
-            Lexer::print_token_with_value(token.clone(), self.source);
-            tokens.push(token);
         }
 
         Ok(tokens)
     }
 
-    fn validate_json_number(value: &str) -> bool {
-        return true;
-    }
-
     fn get_str(&self, span: &Span) -> Option<&str> {
-        self.source.get(span.start..span.end)
-    }
-
-    fn get_candicate_span(&self, start: usize) -> Span {
-        for end in start..self.source.len() {
-            if SEPARATORS_LITERALS.contains(&self.source.chars().nth(end).unwrap()) {
-                return Span { start, end };
-            }
-        }
-        Span {
-            start,
-            end: self.source.len(),
-        }
-    }
-
-    pub fn print_token_with_value(token: JsonToken, source: &str) {
-        let output: String = match token.kind {
-            JsonTokenKind::LBrace => format!(
-                "<kind={} start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::RBrace => format!(
-                "<kind={} start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::LBracket => format!(
-                "<kind={}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::RBracket => format!(
-                "<kind={}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::String => format!(
-                "<kind={}, start={}, end={}, content={}",
-                token.kind,
-                token.span.start,
-                token.span.end,
-                source.get(token.span.start..token.span.end).unwrap()
-            ),
-            JsonTokenKind::Number => format!(
-                "<kind={}, start={}, end={}, content={}",
-                token.kind,
-                token.span.start,
-                token.span.end,
-                source.get(token.span.start..token.span.end).unwrap()
-            ),
-            JsonTokenKind::True => format!(
-                "<kind={}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::False => format!(
-                "<kind={}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::Null => format!(
-                "<kind={}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::Colon => format!(
-                "<kind={}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::Comma => format!(
-                "<kind={}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end
-            ),
-            JsonTokenKind::Stop => format!("<kind = {} />", token.kind,),
-            JsonTokenKind::InvalidToken => format!("<kind = {} />", token.kind,),
-            JsonTokenKind::Whitespace => format!(
-                "<kind {}, start={}, end={} />",
-                token.kind, token.span.start, token.span.end,
-            ),
-        };
-        println!("{}", output);
+        self.source.slice(span.start, span.end)
     }
 }
 
@@ -414,8 +366,12 @@ mod test {
     };
 
     fn run(source: &str) -> Result<Vec<JsonToken>, JsonParserError> {
-        let mut lexer = Lexer::new(source);
-        lexer.parse()
+        let tokens = Lexer::tokenize(source)?;
+        for token in tokens.clone() {
+            println!("{}", token.display(source));
+        }
+
+        Ok(tokens)
     }
 
     fn tok(kind: JsonTokenKind, start: usize, end: usize) -> JsonToken {
@@ -528,6 +484,99 @@ mod test {
     }
 
     #[test]
+    fn strings_raw_unicode() {
+        let cases: [&str; 5] = ["\"é\"", "\"€\"", "\"🙂\"", "\"café\"", "\"é\\n🙂\""];
+        for s in cases {
+            assert_eq!(
+                run(s),
+                Ok(vec![tok(JsonTokenKind::String, 0, s.len())]),
+                "string {:?}",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_string_keeps_following_byte_spans() {
+        let input = "\"é\",1";
+        assert_eq!(
+            run(input),
+            Ok(vec![
+                tok(JsonTokenKind::String, 0, 4),
+                tok(JsonTokenKind::Comma, 4, 5),
+                tok(JsonTokenKind::Number, 5, 6),
+            ])
+        );
+
+        let input = "{\"a\":\"é\"}";
+        assert_eq!(
+            run(input),
+            Ok(vec![
+                tok(JsonTokenKind::LBrace, 0, 1),
+                tok(JsonTokenKind::String, 1, 4),
+                tok(JsonTokenKind::Colon, 4, 5),
+                tok(JsonTokenKind::String, 5, 9),
+                tok(JsonTokenKind::RBrace, 9, 10),
+            ])
+        );
+
+        let input = "[\"🙂\"]";
+        assert_eq!(
+            run(input),
+            Ok(vec![
+                tok(JsonTokenKind::LBracket, 0, 1),
+                tok(JsonTokenKind::String, 1, 7),
+                tok(JsonTokenKind::RBracket, 7, 8),
+            ])
+        );
+    }
+
+    #[test]
+    fn raw_unicode_outside_string_is_error() {
+        let input: [&str; 4] = ["é", "€", "🙂", "\u{00A0}1"];
+        for s in input {
+            assert!(run(s).is_err(), "expected lexical error for {:?}", s);
+        }
+    }
+
+    #[test]
+    fn unescaped_controls_are_errors() {
+        for ch in '\u{0000}'..='\u{001F}' {
+            let input = format!("\"{ch}\"");
+            assert!(
+                run(&input).is_err(),
+                "expected lexical error for U+{:04X}",
+                u32::from(ch)
+            );
+        }
+
+        let embedded: [&str; 3] = ["\"a\rb\"", "\"é\u{0001}\"", "\"\u{001F}x\""];
+        for s in embedded {
+            assert!(run(s).is_err(), "expected lexical error for {:?}", s);
+        }
+    }
+
+    #[test]
+    fn escaped_controls_are_strings() {
+        let cases: [&str; 6] = [
+            "\"\\u0000\"",
+            "\"\\u0001\"",
+            "\"\\u001F\"",
+            "\"\\n\"",
+            "\"\\r\"",
+            "\"\\t\"",
+        ];
+        for s in cases {
+            assert_eq!(
+                run(s),
+                Ok(vec![tok(JsonTokenKind::String, 0, s.len())]),
+                "escaped {:?}",
+                s
+            );
+        }
+    }
+
+    #[test]
     fn strings_invalid_are_errors() {
         let input: [&str; 8] = [
             "\"",
@@ -546,9 +595,9 @@ mod test {
 
     #[test]
     fn numbers_valid() {
-        let input: [&str; 14] = [
-            "0", "1", "10", "123", "-0", "-1", "-10", "0.1", "3.14", "10.0", "1e2", "1E2", "1e+2",
-            "1e-2",
+        let input: [&str; 15] = [
+            "0", "1", "10", "100", "123", "-0", "-1", "-10", "0.1", "3.14", "10.0", "1e2", "1E2",
+            "1e+2", "1e-2",
         ];
         for s in input {
             assert_eq!(
