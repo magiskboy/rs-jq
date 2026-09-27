@@ -2,25 +2,82 @@
     "name": "Nguyen Khac Thanh",
     "age": 28,
     "jobs": [
-        {"title": "Software Engineer"},
-        {"title": "DevOps"}
+        {
+            "title": "Software Engineer"
+        },
+        {
+            "title": "DevOps"
+        }
     ],
     "address": {
         "country": "Viet Nam",
         "city": "Ha Noi"
     },
+    "status": "😀",
     "is_married": true,
     "has_child": false,
     "house": null,
-    "extra": {
-        "case1": 10,
-        "case2": 10.1,
-        "case3": -10,
-        "case4": -10.1,
-        "case5": 10e10,
-        "case6": -10e10,
-        "case7": 10e-10,
-        "case8": -10e-10,
-        "escape_string": "line1\nline2\"\nline3"
+    "literals": {
+        "true": true,
+        "false": false,
+        "null": null
+    },
+    "numbers": {
+        "zero": 0,
+        "negative_zero": -0,
+        "digit": 1,
+        "integer": 10,
+        "negative_integer": -10,
+        "fraction": 10.1,
+        "negative_fraction": -10.1,
+        "fraction_zero": 0.0,
+        "exponent": 10e10,
+        "exponent_upper": 10E10,
+        "exponent_plus": 10e+10,
+        "exponent_minus": 10e-10,
+        "negative_exponent": -10e10,
+        "negative_exponent_minus": -10e-10,
+        "fraction_and_exponent": 1.5e+2,
+        "negative_fraction_and_exponent": -1.25E-1
+    },
+    "strings": {
+        "empty": "",
+        "space": " ",
+        "plain": "hello world",
+        "unicode": "café € 🙂",
+        "quote": "\"",
+        "backslash": "\\",
+        "solidus": "\/",
+        "backspace": "\b",
+        "form_feed": "\f",
+        "line_feed": "\n",
+        "carriage_return": "\r",
+        "tab": "\t",
+        "unicode_escape": "\u0041",
+        "unicode_escape_lower": "\u00e9",
+        "unicode_escape_upper": "\u20AC",
+        "surrogate_pair": "\uD83D\uDE00",
+        "escaped_control": "\u0000\u001F",
+        "all_simple_escapes": "\"\\\/\b\f\n\r\t",
+        "mixed": "line1\nline2\"\nline3"
+    },
+    "arrays": {
+        "empty": [],
+        "one": [1],
+        "nested_empty": [[]],
+        "numbers": [0, 1, -1],
+        "mixed": [true, false, null, "x", 1, [], {}],
+        "nested": [1, [2, [3]]]
+    },
+    "objects": {
+        "empty": {},
+        "empty_key": {
+            "": 0
+        },
+        "nested": {
+            "child": {
+                "k": null
+            }
+        }
     }
 }
