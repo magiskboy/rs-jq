@@ -1,7 +1,7 @@
 use std::{fs::File, io::Read, str::FromStr};
 
 use crate::error::AppError;
-use rs_parser::json::{json_load, value::JsonValue};
+use rs_jq::json::{json_load, value::JsonValue};
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,7 +23,7 @@ impl FromStr for InputFormat {
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "rs-parser-cli", about = "CLI for rs-parser")]
+#[structopt(name = "jq", about = "CLI for rs-jq")]
 struct Opts {
     #[structopt(short, long, default_value = "")]
     input: String,
@@ -34,7 +34,7 @@ struct Opts {
 
 impl Opts {
     pub fn validate(&self) -> Result<(), AppError> {
-        if self.input != String::from("-") && self.format == InputFormat::AUTO {
+        if self.input == String::from("") && self.format == InputFormat::AUTO {
             return Err(AppError::InvalidFormat);
         }
         Ok(())

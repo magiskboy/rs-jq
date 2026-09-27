@@ -1,8 +1,12 @@
 [package]
-name = "rs-parser-cli"
+name = "cli"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "jq"
+path = "src/main.rs"
+
 [dependencies]
-rs-parser = { path = ".." }
+rs-jq = { path = ".." }
 structopt = "0.3"
