@@ -186,19 +186,6 @@ impl<'a> Lexer<'a> {
     }
 
     fn parse_number(&self) -> Result<(JsonToken, usize), JsonParserError> {
-        /*
-         * Follow this Finite state machine to implement JSON number validation
-         *
-         * state = 0: in start
-         * state = 1: in signed
-         * state = 2: in interger
-         * state = 3: at dot
-         * state = 4: after dot
-         * state = 5: at e
-         * state = 6: dec sign
-         * state = 7: dec value
-         */
-
         if Self::has_leading_zero(self.source.data) {
             return Err(JsonParserError::LexicalError(String::from(
                 "invalid number",

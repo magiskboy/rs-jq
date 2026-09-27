@@ -29,19 +29,19 @@ impl<'a> JsonParser<'a> {
         Ok(value)
     }
 
-    pub fn expect_eof(&self) -> Result<(), JsonParserError> {
-        if self.current_token_idx < self.tokens.len() - 1 {
-            return Err(JsonParserError::ParserError(String::from("expect oef")));
-        }
-        Ok(())
-    }
-
     pub fn new(tokens: &'a [JsonToken], source: &'a str) -> Self {
         Self {
             current_token_idx: 0,
             source,
             tokens,
         }
+    }
+
+    fn expect_eof(&self) -> Result<(), JsonParserError> {
+        if self.current_token_idx < self.tokens.len() - 1 {
+            return Err(JsonParserError::ParserError(String::from("expect oef")));
+        }
+        Ok(())
     }
 
     fn parse_object(&mut self) -> Result<JsonValue, JsonParserError> {
@@ -202,10 +202,9 @@ impl<'a> JsonParser<'a> {
             let content = self.source.get(token.span.start..token.span.end).ok_or(
                 JsonParserError::ParserError(String::from("Can't get content of number")),
             )?;
-            let number = String::from(content).parse::<f32>().map_err(|_| {
+            return String::from(content).parse::<f32>().map_err(|_| {
                 JsonParserError::ParserError(String::from("Can't parse number content to float32"))
-            })?;
-            return Ok(number);
+            });
         }
 
         Err(JsonParserError::ParserError(String::from(
