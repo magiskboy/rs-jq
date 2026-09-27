@@ -44,6 +44,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "rs-jq",
+ "structopt",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -116,16 +124,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "rs-parser"
+name = "rs-jq"
 version = "0.1.0"
-
-[[package]]
-name = "rs-parser-cli"
-version = "0.1.0"
-dependencies = [
- "rs-parser",
- "structopt",
-]
 
 [[package]]
 name = "strsim"
