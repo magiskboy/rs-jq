@@ -1,7 +1,7 @@
-use std::{any::Any, fs::File, io::Read, str::FromStr};
+use std::{fs::File, io::Read, str::FromStr};
 
 use crate::error::AppError;
-use rs_parser::json::lexer::Lexer;
+use rs_parser::json::{json_load, value::JsonValue};
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -25,7 +25,7 @@ impl FromStr for InputFormat {
 #[derive(Debug, StructOpt)]
 #[structopt(name = "rs-parser-cli", about = "CLI for rs-parser")]
 struct Opts {
-    #[structopt(short, long, default_value = "-")]
+    #[structopt(short, long, default_value = "")]
     input: String,
 
     #[structopt(short, long, default_value = "auto")]
@@ -43,30 +43,21 @@ impl Opts {
 
 fn load_input(input: &String) -> Result<Box<dyn Read>, AppError> {
     match input.as_str() {
-        "-" => Ok(Box::new(std::io::stdin())),
+        "" => Ok(Box::new(std::io::stdin())),
         _ => Ok(Box::new(
             File::open(&input).map_err(|_| AppError::InvalidInput)?,
         )),
     }
 }
 
-fn process(mut reader: Box<dyn Read>, opts: &Opts) -> Result<(), AppError> {
+fn process(mut reader: Box<dyn Read>, _: &Opts) -> Result<JsonValue, AppError> {
     let mut source = String::new();
     reader
         .read_to_string(&mut source)
         .map_err(|_| AppError::InvalidInput)?;
 
-    println!("{}", source);
-
-    let mut lexer = Lexer::new();
-    let tokens = lexer.parse(&source).map_err(|e| {
-        eprintln!("{:?}", e);
-        AppError::InvalidInput
-    })?;
-    for token in tokens {
-        Lexer::print_token(token, source.as_str());
-    }
-    Ok(())
+    let json_value = json_load(&source).map_err(|err| AppError::ParseError(err.to_string()))?;
+    Ok(json_value)
 }
 
 pub fn execute() -> Result<(), AppError> {
@@ -75,7 +66,8 @@ pub fn execute() -> Result<(), AppError> {
     opts.validate()?;
 
     let reader = load_input(&opts.input)?;
-    process(reader, &opts)?;
+    let json_value = process(reader, &opts)?;
+    println!("{}", json_value);
 
     Ok(())
 }
