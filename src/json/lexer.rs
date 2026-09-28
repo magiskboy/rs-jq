@@ -1,5 +1,5 @@
 use crate::json::{
-    error::JsonParserError,
+    error::{JsonError, JsonErrorKind},
     escape::{ESCAPE_TOKENS, MUST_BE_ESCAPED},
     token::{JsonToken, JsonTokenKind, Span},
 };
@@ -34,7 +34,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn next_token(&mut self) -> Result<JsonToken, JsonParserError> {
+    pub fn next_token(&mut self) -> Result<JsonToken, JsonError> {
         if self.index >= self.source.len() {
             return Ok(JsonToken {
                 kind: JsonTokenKind::Stop,
@@ -123,51 +123,39 @@ impl<'a> Lexer<'a> {
             'f' => self.parse_literal(JsonTokenKind::False)?,
             'n' => self.parse_literal(JsonTokenKind::Null)?,
             '0'..='9' | '-' => self.parse_number()?,
-            _ => (
-                JsonToken {
-                    kind: JsonTokenKind::InvalidToken,
-                    span: Span {
+            _ => {
+                return Err(JsonError::new(
+                    JsonErrorKind::InvalidCharacter,
+                    Span {
                         start: pos,
-                        end: pos + 1,
+                        end: pos + c.len_utf8(),
                     },
-                },
-                0,
-            ),
+                ));
+            }
         };
-
-        if token.kind == JsonTokenKind::InvalidToken {
-            return Err(JsonParserError::LexicalError(String::from(
-                "invalid character",
-            )));
-        }
 
         self.index = next_index;
         Ok(token)
     }
 
-    fn parse_literal(
-        &self,
-        token_type: JsonTokenKind,
-    ) -> Result<(JsonToken, usize), JsonParserError> {
-        let s = match token_type {
+    fn parse_literal(&self, token_type: JsonTokenKind) -> Result<(JsonToken, usize), JsonError> {
+        let expected = match token_type {
             JsonTokenKind::True => "true",
             JsonTokenKind::False => "false",
             JsonTokenKind::Null => "null",
-            _ => "",
+            _ => {
+                debug_assert!(false, "parse_literal only accepts true, false, and null");
+                "literal"
+            }
         };
-        let err = Err(JsonParserError::LexicalError(String::from(
-            "invalid literal",
-        )));
-        if s.is_empty() {
-            return err;
-        }
 
+        let start = self.index;
         let span = Span {
-            start: self.index,
-            end: self.index + s.len(),
+            start,
+            end: start + expected.len(),
         };
 
-        if self.get_str(&span) == Some(s) {
+        if self.get_str(&span) == Some(expected) {
             return Ok((
                 JsonToken {
                     kind: token_type,
@@ -177,7 +165,13 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        err
+        Err(JsonError::new(
+            JsonErrorKind::InvalidLiteral { expected },
+            Span {
+                start,
+                end: span.end.min(self.source.len()),
+            },
+        ))
     }
 
     fn has_leading_zero(value: &str) -> bool {
@@ -185,23 +179,21 @@ impl<'a> Lexer<'a> {
         matches!(int_part.as_bytes(), [b'0', b'0'..=b'9', ..])
     }
 
-    fn parse_number(&self) -> Result<(JsonToken, usize), JsonParserError> {
+    fn parse_number(&self) -> Result<(JsonToken, usize), JsonError> {
         if Self::has_leading_zero(self.source.data) {
-            return Err(JsonParserError::LexicalError(String::from(
-                "invalid number",
-            )));
+            return Err(self.invalid_number(self.number_lexeme_end()));
         }
 
         let mut span = Span {
             start: self.index,
             end: self.index,
         };
-        let value = self
-            .source
-            .slice_at(self.index)
-            .ok_or(JsonParserError::ParserError(String::from("invalid number")))?;
+        let Some(value) = self.source.slice_at(self.index) else {
+            return Err(self.invalid_number(self.index));
+        };
 
         let mut state: ParseNumberState = ParseNumberState::Start;
+        let mut stopped_on_error = false;
         for c in value.chars() {
             let next_state = match c {
                 '-' => match state {
@@ -242,12 +234,21 @@ impl<'a> Lexer<'a> {
             };
 
             match next_state {
-                ParseNumberState::OnError | ParseNumberState::OnSeparator => break,
+                ParseNumberState::OnSeparator => break,
+                ParseNumberState::OnError => {
+                    span.end += c.len_utf8();
+                    stopped_on_error = true;
+                    break;
+                }
                 _ => {
                     state = next_state;
                     span.end += 1;
                 }
             }
+        }
+
+        if stopped_on_error {
+            return Err(JsonError::new(JsonErrorKind::InvalidNumber, span));
         }
 
         match state {
@@ -261,9 +262,35 @@ impl<'a> Lexer<'a> {
                 },
                 span.end,
             )),
-            _ => Err(JsonParserError::LexicalError(String::from(
-                "invalid number",
-            ))),
+            _ => Err(JsonError::new(JsonErrorKind::InvalidNumber, span)),
+        }
+    }
+
+    fn invalid_number(&self, end: usize) -> JsonError {
+        JsonError::new(
+            JsonErrorKind::InvalidNumber,
+            Span {
+                start: self.index,
+                end,
+            },
+        )
+    }
+
+    fn number_lexeme_end(&self) -> usize {
+        let mut end = self.index;
+        let Some(rest) = self.source.slice_at(self.index) else {
+            return end;
+        };
+        for c in rest.chars() {
+            match c {
+                '{' | '}' | '[' | ']' | ',' | ' ' | ':' | '\r' | '\t' | '\n' => break,
+                _ => end += c.len_utf8(),
+            }
+        }
+        if end == self.index {
+            (self.index + 1).min(self.source.len())
+        } else {
+            end
         }
     }
 
@@ -273,45 +300,77 @@ impl<'a> Lexer<'a> {
         MUST_BE_ESCAPED.contains(&encoded)
     }
 
-    fn parse_string(&mut self) -> Result<(JsonToken, usize), JsonParserError> {
+    fn parse_string(&mut self) -> Result<(JsonToken, usize), JsonError> {
         let source = self.source;
+        let start = self.index;
         let mut idx = self.index + 1;
 
         while idx < source.len() {
             let c = source.char_at(idx);
             if c == Some('\\') {
-                let escape = source
+                if let Some(escape) = source
                     .slice(idx, idx + 2)
                     .filter(|s| ESCAPE_TOKENS.contains(s))
-                    .or_else(|| {
-                        source
-                            .slice(idx, idx + 6)
-                            .filter(|s| Self::is_hex_escape(s))
-                    });
-                let Some(s) = escape else { break };
-                idx += s.len();
-                continue;
+                {
+                    idx += escape.len();
+                    continue;
+                }
+                if let Some(escape) = source
+                    .slice(idx, idx + 6)
+                    .filter(|s| Self::is_hex_escape(s))
+                {
+                    idx += escape.len();
+                    continue;
+                }
+
+                let tail = source.slice_at(idx).unwrap_or("");
+                if tail.starts_with("\\u") {
+                    return Err(JsonError::new(
+                        JsonErrorKind::InvalidUnicodeEscape,
+                        Span {
+                            start,
+                            end: (idx + 6).min(source.len()),
+                        },
+                    ));
+                }
+                return Err(JsonError::new(
+                    JsonErrorKind::InvalidEscape,
+                    Span {
+                        start,
+                        end: (idx + 2).min(source.len()),
+                    },
+                ));
             } else if c == Some('"') {
                 return Ok((
                     JsonToken {
                         kind: JsonTokenKind::String,
                         span: Span {
-                            start: self.index,
+                            start,
                             end: idx + 1,
                         },
                     },
                     idx + 1,
                 ));
-            } else if c.is_some_and(Self::must_be_escaped) {
-                break;
+            } else if let Some(ch) = c.filter(|ch| Self::must_be_escaped(*ch)) {
+                return Err(JsonError::new(
+                    JsonErrorKind::UnescapedControl,
+                    Span {
+                        start,
+                        end: idx + ch.len_utf8(),
+                    },
+                ));
             } else {
                 idx += 1;
             }
         }
 
-        Err(JsonParserError::LexicalError(String::from(
-            "invalid string",
-        )))
+        Err(JsonError::new(
+            JsonErrorKind::UnterminatedString,
+            Span {
+                start,
+                end: source.len(),
+            },
+        ))
     }
 
     fn is_hex_escape(value: &str) -> bool {
@@ -324,7 +383,7 @@ impl<'a> Lexer<'a> {
                 .all(|c| c.is_ascii_hexdigit())
     }
 
-    pub fn tokenize(source: &'a str) -> Result<Vec<JsonToken>, JsonParserError> {
+    pub fn tokenize(source: &'a str) -> Result<Vec<JsonToken>, JsonError> {
         let mut lexer = Self::new(source);
         let mut tokens: Vec<JsonToken> = vec![];
 
@@ -348,11 +407,11 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod test {
     use crate::json::{
-        error::JsonParserError,
+        error::{JsonError, JsonErrorKind},
         lexer::{JsonToken, JsonTokenKind, Lexer, Span},
     };
 
-    fn run(source: &str) -> Result<Vec<JsonToken>, JsonParserError> {
+    fn run(source: &str) -> Result<Vec<JsonToken>, JsonError> {
         let tokens = Lexer::tokenize(source)?;
         for token in tokens.clone() {
             println!("{}", token.display(source));
@@ -716,5 +775,45 @@ mod test {
         for s in input {
             assert!(run(s).is_err(), "expected lexical error for {:?}", s);
         }
+    }
+
+    #[test]
+    fn lexical_errors_carry_kind_and_span() {
+        let err = run("@").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::InvalidCharacter);
+        assert_eq!(err.span, Span { start: 0, end: 1 });
+        assert_eq!(err.to_string(), "lexical error at 0..1: invalid character");
+
+        let err = run("tru").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::InvalidLiteral { expected: "true" });
+        assert_eq!(err.span, Span { start: 0, end: 3 });
+        assert_eq!(
+            err.to_string(),
+            "lexical error at 0..3: invalid literal, expected true"
+        );
+
+        let err = run("01").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::InvalidNumber);
+        assert_eq!(err.span, Span { start: 0, end: 2 });
+
+        let err = run("1.").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::InvalidNumber);
+        assert_eq!(err.span, Span { start: 0, end: 2 });
+
+        let err = run("\"abc").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::UnterminatedString);
+        assert_eq!(err.span, Span { start: 0, end: 4 });
+
+        let err = run("\"\\x\"").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::InvalidEscape);
+        assert_eq!(err.span, Span { start: 0, end: 3 });
+
+        let err = run("\"\\uZZZZ\"").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::InvalidUnicodeEscape);
+        assert_eq!(err.span, Span { start: 0, end: 7 });
+
+        let err = run("\"\n\"").unwrap_err();
+        assert_eq!(err.kind, JsonErrorKind::UnescapedControl);
+        assert_eq!(err.span, Span { start: 0, end: 2 });
     }
 }

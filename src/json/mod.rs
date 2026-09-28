@@ -1,4 +1,4 @@
-use crate::json::{error::JsonParserError, parser::JsonParser, value::JsonValue};
+use crate::json::{error::JsonError, parser::JsonParser, value::JsonValue};
 
 pub mod error;
 pub(crate) mod escape;
@@ -22,7 +22,7 @@ impl Default for JsonDumpOptions {
     }
 }
 
-pub fn json_load(source: &str) -> Result<JsonValue, JsonParserError> {
+pub fn json_load(source: &str) -> Result<JsonValue, JsonError> {
     JsonParser::parse(source)
 }
 
