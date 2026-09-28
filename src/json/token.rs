@@ -39,6 +39,27 @@ impl Display for JsonTokenKind {
     }
 }
 
+impl JsonTokenKind {
+    pub(crate) fn syntax_name(&self) -> &'static str {
+        match self {
+            JsonTokenKind::LBrace => "lbrace",
+            JsonTokenKind::RBrace => "rbrace",
+            JsonTokenKind::LBracket => "lbracket",
+            JsonTokenKind::RBracket => "rbracket",
+            JsonTokenKind::String => "string",
+            JsonTokenKind::Number => "number",
+            JsonTokenKind::True => "true",
+            JsonTokenKind::False => "false",
+            JsonTokenKind::Null => "null",
+            JsonTokenKind::Colon => "colon",
+            JsonTokenKind::Comma => "comma",
+            JsonTokenKind::Whitespace => "whitespace",
+            JsonTokenKind::InvalidToken => "invalid",
+            JsonTokenKind::Stop => "end",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonToken {
     pub kind: JsonTokenKind,
