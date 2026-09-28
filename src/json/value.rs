@@ -15,10 +15,7 @@ pub enum JsonValue {
 
 impl Display for JsonValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let opts = JsonDumpOptions {
-            indent: 2,
-            tab: false,
-        };
+        let opts = JsonDumpOptions::default();
         json_dumps(f, self, &opts)
     }
 }

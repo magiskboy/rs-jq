@@ -9,8 +9,17 @@ pub mod value;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct JsonDumpOptions {
-    indent: i32,
-    tab: bool,
+    indent: String,
+    pretty: bool,
+}
+
+impl Default for JsonDumpOptions {
+    fn default() -> Self {
+        Self {
+            indent: "  ".to_string(),
+            pretty: true,
+        }
+    }
 }
 
 pub fn json_load(source: &str) -> Result<JsonValue, JsonParserError> {
@@ -22,36 +31,7 @@ pub fn json_dump(
     value: &JsonValue,
     opts: &JsonDumpOptions,
 ) -> Result<(), std::io::Error> {
-    //TODO: need circle ref check before dump
-    match value {
-        JsonValue::Null => write!(writer, "null"),
-        JsonValue::True => write!(writer, "true"),
-        JsonValue::False => write!(writer, "false"),
-        JsonValue::Number(n) => write!(writer, "{}", n),
-        JsonValue::String(st) => write!(writer, "\"{}\"", st),
-        JsonValue::Array(items) => {
-            write!(writer, "[")?;
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ",")?;
-                }
-                json_dump(writer, item, opts)?
-            }
-            write!(writer, "]")
-        }
-        JsonValue::Object(value) => {
-            write!(writer, "{{")?;
-            for (i, (k, v)) in value.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ",")?;
-                }
-
-                write!(writer, "\"{}\":", k)?;
-                json_dump(writer, v, opts)?
-            }
-            write!(writer, "}}")
-        }
-    }
+    dump(value, writer, opts, 0)
 }
 
 pub fn json_dumps(
@@ -60,7 +40,124 @@ pub fn json_dumps(
     opts: &JsonDumpOptions,
 ) -> std::fmt::Result {
     let mut bytes = Vec::new();
-    json_dump(&mut bytes, value, opts).map_err(|_| std::fmt::Error)?;
+    dump(value, &mut bytes, opts, 0).map_err(|_| std::fmt::Error)?;
     let string = String::from_utf8(bytes).map_err(|_| std::fmt::Error)?;
     write!(writer, "{}", string)
+}
+
+fn write_indent(
+    writer: &mut impl std::io::Write,
+    depth: usize,
+    opts: &JsonDumpOptions,
+) -> std::io::Result<()> {
+    for _ in 0..depth {
+        writer.write_all(opts.indent.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn dump(
+    value: &JsonValue,
+    writer: &mut impl std::io::Write,
+    opts: &JsonDumpOptions,
+    depth: usize,
+) -> Result<(), std::io::Error> {
+    match value {
+        JsonValue::Null => write!(writer, "null"),
+        JsonValue::True => write!(writer, "true"),
+        JsonValue::False => write!(writer, "false"),
+        JsonValue::Number(n) => write!(writer, "{}", n),
+        JsonValue::String(st) => write_json_string(writer, st),
+        JsonValue::Array(items) => {
+            write!(writer, "[")?;
+            if !items.is_empty() {
+                if opts.pretty {
+                    writeln!(writer)?;
+                }
+
+                for (i, item) in items.iter().enumerate() {
+                    if opts.pretty {
+                        write_indent(writer, depth + 1, opts)?;
+                    }
+
+                    dump(item, writer, opts, depth + 1)?;
+
+                    if i + 1 < items.len() {
+                        write!(writer, ",")?;
+                    }
+
+                    if opts.pretty {
+                        writeln!(writer)?;
+                    }
+                }
+                if opts.pretty {
+                    write_indent(writer, depth, opts)?;
+                }
+            }
+            write!(writer, "[")
+        }
+        JsonValue::Object(object) => {
+            write!(writer, "{{")?;
+
+            if !object.is_empty() {
+                writeln!(writer)?;
+            }
+
+            for (i, (key, value)) in object.iter().enumerate() {
+                if opts.pretty {
+                    write_indent(writer, depth + 1, opts)?;
+
+                    write_json_string(writer, key)?;
+                    if opts.pretty {
+                        write!(writer, ": ")?;
+                    } else {
+                        write!(writer, ":")?;
+                    }
+
+                    dump(value, writer, opts, depth + 1)?;
+
+                    if i + i < object.len() {
+                        write!(writer, ",")?;
+                    }
+
+                    if opts.pretty {
+                        writeln!(writer)?;
+                    }
+                }
+            }
+
+            if opts.pretty {
+                write_indent(writer, depth, opts)?;
+            }
+
+            write!(writer, "}}")
+        }
+    }
+}
+
+fn write_json_string(writer: &mut impl std::io::Write, value: &str) -> std::io::Result<()> {
+    write!(writer, "\"")?;
+
+    for ch in value.chars() {
+        match ch {
+            '"' => writer.write_all(br#"\""#)?,
+            '\\' => writer.write_all(br"\")?,
+            '\n' => writer.write_all(br"\n")?,
+            '\r' => writer.write_all(br"\r")?,
+            '\t' => writer.write_all(br"\t")?,
+            '\u{08}' => writer.write_all(br"\b")?,
+            '\u{0C}' => writer.write_all(br"\f")?,
+
+            ch if ch.is_control() => {
+                write!(writer, "\\u{:04x}", ch as u32)?;
+            }
+
+            ch => {
+                let mut buffer = [0; 4];
+                writer.write_all(ch.encode_utf8(&mut buffer).as_bytes())?;
+            }
+        }
+    }
+
+    write!(writer, "\"")
 }
