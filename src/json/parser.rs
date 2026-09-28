@@ -50,7 +50,7 @@ impl<'a> JsonParser<'a> {
         let members = self.parse_members()?;
         self.next_token()?;
         self.parse_token(JsonTokenKind::RBrace)?;
-        Ok(JsonValue::Object(HashMap::<String, JsonValue>::from_iter(
+        Ok(JsonValue::object(HashMap::<String, JsonValue>::from_iter(
             members.into_iter(),
         )))
     }
@@ -95,7 +95,7 @@ impl<'a> JsonParser<'a> {
         let elements = self.parse_elements()?;
         self.next_token()?;
         self.parse_token(JsonTokenKind::RBracket)?;
-        Ok(JsonValue::Array(elements))
+        Ok(JsonValue::array(elements))
     }
 
     fn parse_elements(&mut self) -> Result<Vec<JsonValue>, JsonParserError> {
@@ -125,11 +125,11 @@ impl<'a> JsonParser<'a> {
         let first = self.get_token();
 
         match first.kind {
-            JsonTokenKind::Null => Ok(JsonValue::Null),
-            JsonTokenKind::True => Ok(JsonValue::True),
-            JsonTokenKind::False => Ok(JsonValue::False),
-            JsonTokenKind::String => Ok(JsonValue::String(self.get_string_content(first)?)),
-            JsonTokenKind::Number => Ok(JsonValue::Number(self.get_number_content(first)?)),
+            JsonTokenKind::Null => Ok(JsonValue::null()),
+            JsonTokenKind::True => Ok(JsonValue::boolean(true)),
+            JsonTokenKind::False => Ok(JsonValue::boolean(false)),
+            JsonTokenKind::String => Ok(JsonValue::string(self.get_string_content(first)?)),
+            JsonTokenKind::Number => Ok(JsonValue::number(self.get_number_content(first)?)),
             JsonTokenKind::LBracket => self.parse_array(),
             JsonTokenKind::LBrace => self.parse_object(),
             _ => Err(JsonParserError::ParserError(String::from(

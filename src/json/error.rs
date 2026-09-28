@@ -8,6 +8,8 @@ pub enum JsonParserError {
     DeserializeError(String),
 }
 
+impl std::error::Error for JsonParserError {}
+
 impl Display for JsonParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
