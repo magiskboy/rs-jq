@@ -1,8 +1,20 @@
-[workspace]
-members = [".", "cli"]
-resolver = "2"
-
 [package]
 name = "rs-jq"
 version = "0.1.0"
 edition = "2024"
+
+[lib]
+name = "rs_jq"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jq"
+path = "src/bin/jq/main.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["dep:structopt"]
+
+[dependencies]
+structopt = { version = "0.3", optional = true }

@@ -600,12 +600,12 @@ mod test {
     fn parse_errors_carry_kind_and_span() {
         let err = parse("").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::EmptyInput);
-        assert_eq!(err.span, Span { start: 0, end: 0 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 0 }));
         assert_eq!(err.to_string(), "parse error at 0..0: empty input");
 
         let err = parse(" ").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::EmptyInput);
-        assert_eq!(err.span, Span { start: 0, end: 1 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 1 }));
 
         let err = parse("{").unwrap_err();
         assert_eq!(
@@ -614,7 +614,7 @@ mod test {
                 expected: ExpectedSyntax::Token(JsonTokenKind::RBrace),
             }
         );
-        assert_eq!(err.span, Span { start: 1, end: 1 });
+        assert_eq!(err.span, Some(Span { start: 1, end: 1 }));
         assert_eq!(
             err.to_string(),
             "parse error at 1..1: expected rbrace but reached end of input"
@@ -622,7 +622,7 @@ mod test {
 
         let err = parse("true false").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::TrailingInput);
-        assert_eq!(err.span, Span { start: 5, end: 10 });
+        assert_eq!(err.span, Some(Span { start: 5, end: 10 }));
         assert_eq!(err.to_string(), "parse error at 5..10: trailing input");
 
         let err = parse("[1}").unwrap_err();
@@ -633,7 +633,7 @@ mod test {
                 found: JsonTokenKind::RBrace,
             }
         );
-        assert_eq!(err.span, Span { start: 2, end: 3 });
+        assert_eq!(err.span, Some(Span { start: 2, end: 3 }));
         assert_eq!(
             err.to_string(),
             "parse error at 2..3: expected rbracket but found rbrace"
@@ -650,7 +650,7 @@ mod test {
 
         let err = parse(r#""\uD800""#).unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidSurrogatePair);
-        assert_eq!(err.span, Span { start: 0, end: 8 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 8 }));
         assert_eq!(
             err.to_string(),
             "lexical error at 0..8: invalid surrogate pair"
