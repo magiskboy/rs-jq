@@ -66,7 +66,7 @@ fn process(mut reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError
         jql_parse(&opts.script).map_err(|err| AppError::ParseError(err.to_string()))?;
     println!("[DEBUG] JQL parsing");
     for t in jql_tokens.clone() {
-        println!("{}", t.display(&source));
+        println!("{}", t.display(&opts.script));
     }
 
     Ok(json_value)

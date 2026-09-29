@@ -40,10 +40,11 @@
 
 <space> ::= " "
 
-<string_value> ::= "\"" ([a-z] | [A-Z] | [0-9]) "\""
+<string_value> ::= "\"" ([a-z] | [A-Z] | [0-9] | " ") "\""
 ```
 
 ## Examples
 ```
 .[1] | filter(.id > 10 && .age < 20 && (.money > 10 || .gold >= 1))
 ```
+

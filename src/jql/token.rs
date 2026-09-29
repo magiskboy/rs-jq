@@ -2,8 +2,8 @@ use crate::source::Span;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum JqlTokenKind {
-    LBrace,
-    RBrace,
+    LParen,
+    RParen,
     Pipe,
 
     // data types
@@ -13,30 +13,44 @@ pub enum JqlTokenKind {
     Null,
 
     Identifier,
-    ComparisionOp,
-    LogicalOp,
+    EqualOp,
+    NotEqualOp,
+    GreaterOp,
+    LessOp,
+    GreaterEqualOp,
+    LessEqualOp,
+    AndLogicalOp,
+    OrLogicalOp,
     Keyword,
 
     // Special tokens
     Stop,
     InvalidToken,
+    Whitespace,
 }
 
 impl std::fmt::Display for JqlTokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::LBrace => write!(f, "LBrace"),
-            Self::RBrace => write!(f, "RBrace"),
+            Self::LParen => write!(f, "LParen"),
+            Self::RParen => write!(f, "RParen"),
             Self::Pipe => write!(f, "Pipe"),
             Self::Number => write!(f, "Number"),
             Self::String => write!(f, "String"),
             Self::Boolean => write!(f, "Boolean"),
             Self::Null => write!(f, "Null"),
             Self::Identifier => write!(f, "Identifier"),
-            Self::ComparisionOp => write!(f, "ComparisionOp"),
-            Self::LogicalOp => write!(f, "LogicalOp"),
+            Self::EqualOp => write!(f, "Equal"),
+            Self::NotEqualOp => write!(f, "NotEqualOp"),
+            Self::GreaterOp => write!(f, "GreaterOp"),
+            Self::GreaterEqualOp => write!(f, "GreaterEqualOp"),
+            Self::LessOp => write!(f, "LessOp"),
+            Self::LessEqualOp => write!(f, "LessEqualOp"),
+            Self::AndLogicalOp => write!(f, "AndLogicalOp"),
+            Self::OrLogicalOp => write!(f, "OrLogicalOp"),
             Self::Keyword => write!(f, "Keyword"),
             Self::Stop => write!(f, "Stop"),
+            Self::Whitespace => write!(f, "Whitespace"),
             Self::InvalidToken => write!(f, "InvalidToken"),
         }
     }
