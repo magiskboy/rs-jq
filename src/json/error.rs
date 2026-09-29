@@ -20,6 +20,46 @@ impl ExpectedSyntax {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonType {
+    Null,
+    Boolean,
+    Number,
+    String,
+    Array,
+    Object,
+}
+
+impl JsonType {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Boolean => "boolean",
+            Self::Number => "number",
+            Self::String => "string",
+            Self::Array => "array",
+            Self::Object => "object",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedJsonType {
+    Array,
+    Object,
+    ArrayOrObject,
+}
+
+impl ExpectedJsonType {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Array => "array",
+            Self::Object => "object",
+            Self::ArrayOrObject => "array or object",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JsonErrorKind {
     InvalidCharacter,
@@ -41,6 +81,20 @@ pub enum JsonErrorKind {
         expected: ExpectedSyntax,
     },
     TrailingInput,
+    TypeMismatch {
+        expected: ExpectedJsonType,
+        found: JsonType,
+    },
+    KeyNotFound {
+        key: String,
+    },
+    IndexOutOfBounds {
+        index: usize,
+        len: usize,
+    },
+    InvalidIndex {
+        key: String,
+    },
 }
 
 impl JsonErrorKind {
@@ -58,6 +112,10 @@ impl JsonErrorKind {
             | Self::UnexpectedToken { .. }
             | Self::UnexpectedEof { .. }
             | Self::TrailingInput => "parse",
+            Self::TypeMismatch { .. }
+            | Self::KeyNotFound { .. }
+            | Self::IndexOutOfBounds { .. }
+            | Self::InvalidIndex { .. } => "value",
         }
     }
 
@@ -84,6 +142,16 @@ impl JsonErrorKind {
                 expected.name(),
             )),
             Self::TrailingInput => Cow::Borrowed("trailing input"),
+            Self::TypeMismatch { expected, found } => Cow::Owned(format!(
+                "expected {} but found {}",
+                expected.name(),
+                found.name(),
+            )),
+            Self::KeyNotFound { key } => Cow::Owned(format!("key \"{key}\" not found")),
+            Self::IndexOutOfBounds { index, len } => {
+                Cow::Owned(format!("index {index} out of bounds for length {len}"))
+            }
+            Self::InvalidIndex { key } => Cow::Owned(format!("invalid index \"{key}\"")),
         }
     }
 }
@@ -91,12 +159,19 @@ impl JsonErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonError {
     pub kind: JsonErrorKind,
-    pub span: Span,
+    pub span: Option<Span>,
 }
 
 impl JsonError {
     pub fn new(kind: JsonErrorKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span: Some(span),
+        }
+    }
+
+    pub fn value(kind: JsonErrorKind) -> Self {
+        Self { kind, span: None }
     }
 }
 
@@ -104,20 +179,23 @@ impl std::error::Error for JsonError {}
 
 impl Display for JsonError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} error at {}..{}: {}",
-            self.kind.phase(),
-            self.span.start,
-            self.span.end,
-            self.kind.message(),
-        )
+        match self.span {
+            Some(span) => write!(
+                f,
+                "{} error at {}..{}: {}",
+                self.kind.phase(),
+                span.start,
+                span.end,
+                self.kind.message(),
+            ),
+            None => write!(f, "{} error: {}", self.kind.phase(), self.kind.message()),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ExpectedSyntax, JsonError, JsonErrorKind};
+    use super::{ExpectedJsonType, ExpectedSyntax, JsonError, JsonErrorKind, JsonType};
     use crate::json::token::{JsonTokenKind, Span};
 
     fn err(kind: JsonErrorKind, start: usize, end: usize) -> JsonError {
@@ -198,6 +276,36 @@ mod tests {
             (
                 err(JsonErrorKind::TrailingInput, 5, 10),
                 "parse error at 5..10: trailing input",
+            ),
+            (
+                JsonError::value(JsonErrorKind::TypeMismatch {
+                    expected: ExpectedJsonType::ArrayOrObject,
+                    found: JsonType::String,
+                }),
+                "value error: expected array or object but found string",
+            ),
+            (
+                JsonError::value(JsonErrorKind::TypeMismatch {
+                    expected: ExpectedJsonType::Array,
+                    found: JsonType::Number,
+                }),
+                "value error: expected array but found number",
+            ),
+            (
+                JsonError::value(JsonErrorKind::KeyNotFound {
+                    key: "name".to_string(),
+                }),
+                "value error: key \"name\" not found",
+            ),
+            (
+                JsonError::value(JsonErrorKind::IndexOutOfBounds { index: 3, len: 1 }),
+                "value error: index 3 out of bounds for length 1",
+            ),
+            (
+                JsonError::value(JsonErrorKind::InvalidIndex {
+                    key: "name".to_string(),
+                }),
+                "value error: invalid index \"name\"",
             ),
         ];
 

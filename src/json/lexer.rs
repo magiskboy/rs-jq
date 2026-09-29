@@ -781,12 +781,12 @@ mod test {
     fn lexical_errors_carry_kind_and_span() {
         let err = run("@").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidCharacter);
-        assert_eq!(err.span, Span { start: 0, end: 1 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 1 }));
         assert_eq!(err.to_string(), "lexical error at 0..1: invalid character");
 
         let err = run("tru").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidLiteral { expected: "true" });
-        assert_eq!(err.span, Span { start: 0, end: 3 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 3 }));
         assert_eq!(
             err.to_string(),
             "lexical error at 0..3: invalid literal, expected true"
@@ -794,26 +794,26 @@ mod test {
 
         let err = run("01").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidNumber);
-        assert_eq!(err.span, Span { start: 0, end: 2 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 2 }));
 
         let err = run("1.").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidNumber);
-        assert_eq!(err.span, Span { start: 0, end: 2 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 2 }));
 
         let err = run("\"abc").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::UnterminatedString);
-        assert_eq!(err.span, Span { start: 0, end: 4 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 4 }));
 
         let err = run("\"\\x\"").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidEscape);
-        assert_eq!(err.span, Span { start: 0, end: 3 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 3 }));
 
         let err = run("\"\\uZZZZ\"").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidUnicodeEscape);
-        assert_eq!(err.span, Span { start: 0, end: 7 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 7 }));
 
         let err = run("\"\n\"").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::UnescapedControl);
-        assert_eq!(err.span, Span { start: 0, end: 2 });
+        assert_eq!(err.span, Some(Span { start: 0, end: 2 }));
     }
 }
