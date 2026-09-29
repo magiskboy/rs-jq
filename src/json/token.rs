@@ -1,3 +1,4 @@
+use crate::source::Span;
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,12 +65,6 @@ impl JsonTokenKind {
 pub struct JsonToken {
     pub kind: JsonTokenKind,
     pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

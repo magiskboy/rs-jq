@@ -24,3 +24,9 @@ impl<'a> Source<'a> {
         self.data.get(start..)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}

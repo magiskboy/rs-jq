@@ -94,7 +94,7 @@ fn dump(
                     write_indent(writer, depth, opts)?;
                 }
             }
-            write!(writer, "[")
+            write!(writer, "]")
         }
         JsonValue::Object(object) => {
             write!(writer, "{{")?;

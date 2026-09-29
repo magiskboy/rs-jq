@@ -4,9 +4,10 @@ use crate::json::{
     error::{ExpectedSyntax, JsonError, JsonErrorKind},
     escape::{UnescapeError, unescape_json_string},
     lexer::Lexer,
-    token::{JsonToken, JsonTokenKind, Span},
+    token::{JsonToken, JsonTokenKind},
     value::JsonValue,
 };
+use crate::source::Span;
 
 #[derive(Debug, Clone)]
 pub struct JsonParser<'a> {
@@ -249,8 +250,9 @@ mod test {
         JsonValue,
         error::{ExpectedSyntax, JsonError, JsonErrorKind},
         parser::JsonParser,
-        token::{JsonTokenKind, Span},
+        token::{JsonTokenKind},
     };
+    use crate::source::Span;
     use std::collections::HashMap;
 
     fn parse(source: &str) -> Result<JsonValue, JsonError> {

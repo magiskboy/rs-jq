@@ -1,6 +1,7 @@
 use std::{fs::File, io::Read, str::FromStr};
 
 use crate::error::AppError;
+use rs_jq::jql::jql_parse;
 use rs_jq::json::{json_load, value::JsonValue};
 use structopt::StructOpt;
 
@@ -30,6 +31,9 @@ struct Opts {
 
     #[structopt(short, long, default_value = "auto")]
     format: InputFormat,
+
+    #[structopt(short = "s", long, default_value = "")]
+    script: String,
 }
 
 impl Opts {
@@ -50,13 +54,21 @@ fn load_input(input: &String) -> Result<Box<dyn Read>, AppError> {
     }
 }
 
-fn process(mut reader: Box<dyn Read>, _: &Opts) -> Result<JsonValue, AppError> {
+fn process(mut reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError> {
     let mut source = String::new();
     reader
         .read_to_string(&mut source)
         .map_err(|_| AppError::InvalidInput)?;
 
     let json_value = json_load(&source).map_err(|err| AppError::ParseError(err.to_string()))?;
+
+    let jql_tokens =
+        jql_parse(&opts.script).map_err(|err| AppError::ParseError(err.to_string()))?;
+    println!("[DEBUG] JQL parsing");
+    for t in jql_tokens.clone() {
+        println!("{}", t.display(&source));
+    }
+
     Ok(json_value)
 }
 

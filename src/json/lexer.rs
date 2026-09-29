@@ -1,9 +1,9 @@
 use crate::json::{
     error::{JsonError, JsonErrorKind},
     escape::{ESCAPE_TOKENS, MUST_BE_ESCAPED},
-    token::{JsonToken, JsonTokenKind, Span},
+    token::{JsonToken, JsonTokenKind},
 };
-use crate::source::Source;
+use crate::source::{Source, Span};
 
 #[derive(Debug, Clone)]
 pub struct Lexer<'a> {
