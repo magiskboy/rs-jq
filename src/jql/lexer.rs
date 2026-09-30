@@ -256,23 +256,26 @@ impl<'a> JqlLexer<'a> {
 
         let mut state = JqlLexerState::Start;
         let mut position = self.index;
+        let mut c = ' ';
         let mut last_accept_token: Option<JqlToken> = None;
         let mut last_accept_position = position;
 
         while position < self.source.len() {
-            let c = self.source.char_at(position).unwrap();
+            c = self.source.char_at(position).unwrap();
 
             let next_state = self.transition_table(&state, c);
             if next_state.is_none() {
                 break;
             }
 
-            if let Some(token) = self.accept_state(&next_state.unwrap(), self.index, position + 1) {
+            if let Some(token) =
+                self.accept_state(&next_state.unwrap(), self.index, position + c.len_utf8())
+            {
                 last_accept_token = Some(token);
-                last_accept_position = position + 1;
+                last_accept_position = position + c.len_utf8();
             }
             state = next_state.unwrap().clone();
-            position += 1;
+            position += c.len_utf8();
         }
 
         if let Some(token) = last_accept_token {
@@ -284,7 +287,7 @@ impl<'a> JqlLexer<'a> {
             return Ok(token);
         }
 
-        self.index = position + 1;
+        self.index = position + c.len_utf8();
         Err(JqlError {
             kind: super::error::JqlErrorKind::GenericError,
             message: String::from("invalid token"),
