@@ -208,6 +208,16 @@ impl<'a> JqlLexer<'a> {
     }
 
     fn next_token(&mut self) -> Result<JqlToken, JqlError> {
+        if self.index == self.source.len() {
+            return Ok(JqlToken {
+                kind: JqlTokenKind::Stop,
+                span: Span {
+                    start: self.index,
+                    end: self.index,
+                },
+            });
+        }
+
         let mut state = JqlLexerState::Start;
         let mut position = self.index;
         let mut last_accept_token: Option<JqlToken> = None;
@@ -250,9 +260,15 @@ impl<'a> JqlLexer<'a> {
         let mut tokens: Vec<JqlToken> = vec![];
         loop {
             if let Ok(token) = lexer.next_token() {
+                if token.kind == JqlTokenKind::Stop {
+                    break;
+                }
                 tokens.push(token);
             } else {
-                break;
+                return Err(JqlError {
+                    kind: JqlErrorKind::GenericError,
+                    message: String::from("invalid token"),
+                });
             }
         }
         Ok(tokens)
