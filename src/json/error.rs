@@ -3,7 +3,8 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use crate::json::token::{JsonTokenKind, Span};
+use crate::json::token::JsonTokenKind;
+use crate::source::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedSyntax {
@@ -196,7 +197,8 @@ impl Display for JsonError {
 #[cfg(test)]
 mod tests {
     use super::{ExpectedJsonType, ExpectedSyntax, JsonError, JsonErrorKind, JsonType};
-    use crate::json::token::{JsonTokenKind, Span};
+    use crate::json::token::JsonTokenKind;
+    use crate::source::Span;
 
     fn err(kind: JsonErrorKind, start: usize, end: usize) -> JsonError {
         JsonError::new(kind, Span { start, end })
