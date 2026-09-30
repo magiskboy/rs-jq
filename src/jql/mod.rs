@@ -3,6 +3,7 @@ use crate::jql::{error::JqlError, lexer::JqlLexer, token::JqlToken};
 pub(crate) mod error;
 pub(crate) mod lexer;
 pub(crate) mod token;
+pub(crate) mod parser;
 
 //TODO: complete with JqlAst
 pub fn jql_parse(source: &str) -> Result<Vec<JqlToken>, JqlError> {

@@ -33,6 +33,13 @@ enum JqlLexerState {
     InNull,
     InNumber,
     OpenString,
+    StartEscape,
+    StartUnicode,
+    StartUnicode0,
+    StartUnicode1,
+    StartUnicode2,
+    InUnicode,
+    InEscape,
     InString,
     CloseString,
     InIdentifier,
@@ -88,7 +95,34 @@ impl<'a> JqlLexer<'a> {
                 _ => JqlLexerState::InvalidToken,
             },
             JqlLexerState::OpenString | JqlLexerState::InString => match c {
+                '\\' => JqlLexerState::StartEscape,
                 '"' => JqlLexerState::CloseString,
+                _ => JqlLexerState::InString,
+            },
+            JqlLexerState::StartEscape => match c {
+                'u' => JqlLexerState::StartUnicode,
+                'n' | 't' | 'r' | 'b' | 'f' | '\\' | '"' | '/' => JqlLexerState::InEscape,
+                _ => JqlLexerState::InvalidToken,
+            },
+            JqlLexerState::StartUnicode => match c {
+                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::StartUnicode0,
+                _ => JqlLexerState::InvalidToken,
+            },
+            JqlLexerState::StartUnicode0 => match c {
+                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::StartUnicode1,
+                _ => JqlLexerState::InvalidToken,
+            },
+            JqlLexerState::StartUnicode1 => match c {
+                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::StartUnicode2,
+                _ => JqlLexerState::InvalidToken,
+            },
+            JqlLexerState::StartUnicode2 => match c {
+                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::InUnicode,
+                _ => JqlLexerState::InvalidToken,
+            },
+            JqlLexerState::InUnicode | JqlLexerState::InEscape => match c {
+                '"' => JqlLexerState::CloseString,
+                '\\' => JqlLexerState::StartEscape,
                 _ => JqlLexerState::InString,
             },
             JqlLexerState::InT => match c {
@@ -591,6 +625,81 @@ mod test {
         );
     }
 
+    fn lexemes<'a>(source: &'a str, tokens: &[JqlToken]) -> Vec<&'a str> {
+        tokens
+            .iter()
+            .map(|token| &source[token.span.start..token.span.end])
+            .collect()
+    }
+
+    #[test]
+    fn json_number_forms() {
+        for source in ["0", "1", "10", "100", "123"] {
+            assert_eq!(
+                run(source),
+                Ok(vec![tok(JqlTokenKind::Number, 0, source.len())]),
+                "integer {source:?}"
+            );
+        }
+
+        let splits = [
+            ("0.1", vec!["0", ".1"]),
+            ("3.14", vec!["3", ".14"]),
+            ("10.0", vec!["10", ".0"]),
+            ("1e2", vec!["1", "e2"]),
+            ("1E2", vec!["1", "E2"]),
+            ("1.2e3", vec!["1", ".2e3"]),
+            ("0.0e0", vec!["0", ".0e0"]),
+        ];
+        for (source, expected) in splits {
+            let tokens = run(source).expect(source);
+            assert_eq!(
+                kinds(&tokens),
+                vec![JqlTokenKind::Number, JqlTokenKind::Identifier],
+                "number {source:?}"
+            );
+            assert_eq!(lexemes(source, &tokens), expected, "number {source:?}");
+        }
+
+        for source in ["-0", "-1", "-10", "1e+2", "1e-2", "1.2E+3", "-1.2e-3"] {
+            assert_invalid(source);
+        }
+    }
+
+    #[test]
+    fn json_number_forms_that_are_not_a_single_number() {
+        let source = "1.2.3";
+        let tokens = run(source).expect("1.2.3");
+        assert_eq!(
+            kinds(&tokens),
+            vec![
+                JqlTokenKind::Number,
+                JqlTokenKind::Identifier,
+                JqlTokenKind::Identifier,
+            ]
+        );
+        assert_eq!(lexemes(source, &tokens), vec!["1", ".2", ".3"]);
+
+        let source = "1ee2";
+        let tokens = run(source).expect("1ee2");
+        assert_eq!(lexemes(source, &tokens), vec!["1", "ee2"]);
+
+        let source = "0x1";
+        let tokens = run(source).expect("0x1");
+        assert_eq!(lexemes(source, &tokens), vec!["0", "x1"]);
+
+        let source = "1e";
+        let tokens = run(source).expect("1e");
+        assert_eq!(lexemes(source, &tokens), vec!["1", "e"]);
+
+        assert_eq!(run("01"), Ok(vec![tok(JqlTokenKind::Number, 0, 2)]));
+        assert_eq!(run(".1"), Ok(vec![tok(JqlTokenKind::Identifier, 0, 2)]));
+
+        for source in ["+", "+1", "-01", "1e+", "1e-", "--1", "-.1"] {
+            assert_invalid(source);
+        }
+    }
+
     #[test]
     fn strings() {
         let cases = ["\"\"", "\"hi\"", "\"hello world\"", "\"A1\"", "\"a b\""];
@@ -614,6 +723,76 @@ mod test {
             run(spaced),
             Ok(vec![tok(JqlTokenKind::String, 0, spaced.len())])
         );
+    }
+
+    #[test]
+    fn string_escape_sequences_are_literal_text() {
+        let cases = [
+            "\"\\\\\"",
+            "\"\\/\"",
+            "\"\\b\\f\\n\\r\\t\"",
+            "\"\\\\n\"",
+            "\"\\u0041\"",
+            "\"\\u004a\"",
+            "\"\\uD83D\\uDE00\"",
+            "\"\\u12\"",
+            "\"\\uZZZZ\"",
+            "\"\\x\"",
+            "\"a\\\"",
+            "\"foo\\\\\"",
+            "\"é\\n🙂\"",
+        ];
+        for source in cases {
+            assert_eq!(
+                run(source),
+                Ok(vec![tok(JqlTokenKind::String, 0, source.len())]),
+                "string {source:?}"
+            );
+            assert_eq!(
+                lexemes(source, &run(source).expect(source)),
+                vec![source],
+                "string {source:?}"
+            );
+        }
+
+        let source = "\"a\\b\" == \"\\n\"";
+        let tokens = run(source).expect("escaped strings in a comparison");
+        assert_eq!(
+            kinds(&tokens),
+            vec![
+                JqlTokenKind::String,
+                JqlTokenKind::EqualOp,
+                JqlTokenKind::String,
+            ]
+        );
+        assert_eq!(lexemes(source, &tokens), vec!["\"a\\b\"", "==", "\"\\n\""]);
+    }
+
+    #[test]
+    fn escaped_quote_ends_the_string() {
+        let source = "\"hi\\\" there";
+        let tokens = run(source).expect("quote after backslash closes the string");
+        assert_eq!(
+            kinds(&tokens),
+            vec![JqlTokenKind::String, JqlTokenKind::Identifier]
+        );
+        assert_eq!(lexemes(source, &tokens), vec!["\"hi\\\"", "there"]);
+        assert_eq!(tokens[0].span, crate::source::Span { start: 0, end: 5 });
+
+        for source in ["\"\\\"\"", "\"a\\\"b\"", "\"abc\\"] {
+            assert_invalid(source);
+        }
+    }
+
+    #[test]
+    fn unescaped_controls_inside_strings_are_kept() {
+        for source in ["\"a\nb\"", "\"a\rb\"", "\"\u{0000}\"", "\"\u{001F}\""] {
+            assert_eq!(
+                run(source),
+                Ok(vec![tok(JqlTokenKind::String, 0, source.len())]),
+                "string {source:?}"
+            );
+        }
     }
 
     #[test]
