@@ -157,8 +157,14 @@ impl<'a> JqlLexer<'a> {
                 'a'..='z' | 'A'..='Z' | '0'..='9' | '[' | ']' => JqlLexerState::InIdentifier,
                 _ => JqlLexerState::InvalidToken,
             },
-            JqlLexerState::StartEqual => JqlLexerState::InEqual,
-            JqlLexerState::StartNotEqual => JqlLexerState::InNotEqual,
+            JqlLexerState::StartEqual => match c {
+                '=' => JqlLexerState::InEqual,
+                _ => JqlLexerState::InvalidToken,
+            },
+            JqlLexerState::StartNotEqual => match c {
+                '=' => JqlLexerState::InNotEqual,
+                _ => JqlLexerState::InvalidToken,
+            },
             JqlLexerState::InGreater => match c {
                 '=' => JqlLexerState::InGreaterEqual,
                 _ => JqlLexerState::InvalidToken,
@@ -167,7 +173,10 @@ impl<'a> JqlLexer<'a> {
                 '=' => JqlLexerState::InLessEqual,
                 _ => JqlLexerState::InvalidToken,
             },
-            JqlLexerState::StartAnd => JqlLexerState::InAnd,
+            JqlLexerState::StartAnd => match c {
+                '&' => JqlLexerState::InAnd,
+                _ => JqlLexerState::InvalidToken,
+            },
             _ => JqlLexerState::InvalidToken,
         };
 
