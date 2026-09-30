@@ -106,6 +106,10 @@ impl<'a> JqlLexer<'a> {
                 'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
                 _ => JqlLexerState::InvalidToken,
             },
+            JqlLexerState::InTrue => match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
+                _ => JqlLexerState::InvalidToken,
+            },
             JqlLexerState::InF => match c {
                 'a' => JqlLexerState::InFa,
                 'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
@@ -126,6 +130,10 @@ impl<'a> JqlLexer<'a> {
                 'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
                 _ => JqlLexerState::InvalidToken,
             },
+            JqlLexerState::InFalse => match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
+                _ => JqlLexerState::InvalidToken,
+            },
             JqlLexerState::InN => match c {
                 'u' => JqlLexerState::InNu,
                 'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
@@ -138,6 +146,10 @@ impl<'a> JqlLexer<'a> {
             },
             JqlLexerState::InNul => match c {
                 'l' => JqlLexerState::InNull,
+                'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
+                _ => JqlLexerState::InvalidToken,
+            },
+            JqlLexerState::InNull => match c {
                 'a'..='z' | 'A'..='Z' | '0'..='9' => JqlLexerState::InIdentifier,
                 _ => JqlLexerState::InvalidToken,
             },
@@ -167,6 +179,21 @@ impl<'a> JqlLexer<'a> {
 
     fn accept_state(&self, state: &JqlLexerState, start: usize, end: usize) -> Option<JqlToken> {
         let kind = match state {
+            JqlLexerState::InF
+            | JqlLexerState::InFa
+            | JqlLexerState::InFal
+            | JqlLexerState::InFals
+            | JqlLexerState::InT
+            | JqlLexerState::InTr
+            | JqlLexerState::InTru
+            | JqlLexerState::InN
+            | JqlLexerState::InNu
+            | JqlLexerState::InNul => {
+                if end == self.source.len() {
+                    return Some(JqlToken::new(JqlTokenKind::Identifier, start, end));
+                }
+                return None;
+            }
             JqlLexerState::InLBrace => JqlTokenKind::LParen,
             JqlLexerState::InRBrace => JqlTokenKind::RParen,
             JqlLexerState::InPipe => JqlTokenKind::Pipe,
