@@ -1,11 +1,12 @@
-use crate::jql::{error::JqlError, lexer::JqlLexer, token::JqlToken};
+use crate::jql::{ast::JqlAstNode, error::JqlError, lexer::JqlLexer, parser::JqlParser};
 
+pub(crate) mod ast;
 pub(crate) mod error;
 pub(crate) mod lexer;
-pub(crate) mod token;
 pub(crate) mod parser;
+pub(crate) mod token;
 
-//TODO: complete with JqlAst
-pub fn jql_parse(source: &str) -> Result<Vec<JqlToken>, JqlError> {
-    JqlLexer::tokenize(source)
+pub fn jql_parse<'a>(source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {
+    let tokens = JqlLexer::tokenize(source)?;
+    JqlParser::parse(tokens, source)
 }
