@@ -1,16 +1,21 @@
 use crate::source::Span;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd)]
 pub enum JqlTokenKind {
     LParen,
     RParen,
-    Pipe,
 
     // data types
     Number,
     String,
     Boolean,
     Null,
+
+    // and/or must be less than others
+    Pipe,
+
+    AndLogicalOp,
+    OrLogicalOp,
 
     Identifier,
     EqualOp,
@@ -19,9 +24,6 @@ pub enum JqlTokenKind {
     LessOp,
     GreaterEqualOp,
     LessEqualOp,
-    AndLogicalOp,
-    OrLogicalOp,
-    Keyword,
 
     // Special tokens
     Stop,
@@ -48,7 +50,6 @@ impl std::fmt::Display for JqlTokenKind {
             Self::LessEqualOp => write!(f, "LessEqualOp"),
             Self::AndLogicalOp => write!(f, "AndLogicalOp"),
             Self::OrLogicalOp => write!(f, "OrLogicalOp"),
-            Self::Keyword => write!(f, "Keyword"),
             Self::Stop => write!(f, "Stop"),
             Self::Whitespace => write!(f, "Whitespace"),
             Self::InvalidToken => write!(f, "InvalidToken"),
@@ -56,7 +57,33 @@ impl std::fmt::Display for JqlTokenKind {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+impl JqlTokenKind {
+    pub(crate) fn syntax_name(&self) -> &'static str {
+        match self {
+            Self::LParen => "lparen",
+            Self::RParen => "rparen",
+            Self::Pipe => "pipe",
+            Self::Number => "number",
+            Self::String => "string",
+            Self::Boolean => "boolean",
+            Self::Null => "null",
+            Self::Identifier => "identifier",
+            Self::EqualOp => "equal",
+            Self::NotEqualOp => "notequal",
+            Self::GreaterOp => "greater",
+            Self::GreaterEqualOp => "greaterequal",
+            Self::LessOp => "less",
+            Self::LessEqualOp => "lessequal",
+            Self::AndLogicalOp => "and",
+            Self::OrLogicalOp => "or",
+            Self::Stop => "end",
+            Self::Whitespace => "whitespace",
+            Self::InvalidToken => "invalid",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Copy)]
 pub struct JqlToken {
     pub kind: JqlTokenKind,
     pub span: Span,

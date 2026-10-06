@@ -1,0 +1,179 @@
+use crate::jql::{
+    error::{ExpectedSyntax, JqlError, JqlErrorKind},
+    token::{JqlToken, JqlTokenKind},
+};
+
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd)]
+pub enum JqlBinaryKind {
+    And,
+    Or,
+    Less,
+    Greater,
+    Equal,
+    NotEqual,
+    LessEqual,
+    GreaterEqual,
+}
+
+impl JqlBinaryKind {
+    pub fn from_token_kind(kind: &JqlTokenKind) -> Result<Self, JqlError> {
+        match kind {
+            JqlTokenKind::AndLogicalOp => Ok(Self::And),
+            JqlTokenKind::OrLogicalOp => Ok(Self::Or),
+            JqlTokenKind::LessOp => Ok(Self::Less),
+            JqlTokenKind::GreaterOp => Ok(Self::Greater),
+            JqlTokenKind::LessEqualOp => Ok(Self::LessEqual),
+            JqlTokenKind::GreaterEqualOp => Ok(Self::GreaterEqual),
+            JqlTokenKind::NotEqualOp => Ok(Self::NotEqual),
+            JqlTokenKind::EqualOp => Ok(Self::Equal),
+            _ => Err(JqlError::from_kind(JqlErrorKind::UnexpectedToken {
+                expected: ExpectedSyntax::BinaryOperator,
+                found: *kind,
+            })),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JqlAstNode<'a> {
+    LParen,
+    RParen,
+
+    // Operator nodes
+    Access(&'a str),
+    Pipe {
+        source: Box<JqlAstNode<'a>>,
+        dest: Box<JqlAstNode<'a>>,
+    },
+    Call {
+        name: &'a str,
+        args: Vec<JqlAstNode<'a>>,
+    },
+    Binary {
+        kind: JqlBinaryKind,
+        left: Box<JqlAstNode<'a>>,
+        right: Box<JqlAstNode<'a>>,
+    },
+
+    // Operand node
+    Number(f32),
+    String(&'a str),
+    Boolean(bool),
+    Null,
+}
+
+impl<'a> JqlAstNode<'a> {
+    pub fn binary(
+        kind: JqlBinaryKind,
+        left: JqlAstNode<'a>,
+        right: JqlAstNode<'a>,
+    ) -> Result<JqlAstNode<'a>, JqlError> {
+        Ok(JqlAstNode::Binary {
+            kind: kind,
+            left: Box::new(left),
+            right: Box::new(right),
+        })
+    }
+
+    pub fn call(
+        name: &JqlToken,
+        args: Vec<JqlAstNode<'a>>,
+        source: &'a str,
+    ) -> Result<JqlAstNode<'a>, JqlError> {
+        let err = JqlError::new(
+            JqlErrorKind::UnexpectedToken {
+                expected: ExpectedSyntax::Token(JqlTokenKind::Identifier),
+                found: name.kind,
+            },
+            name.span,
+        );
+        Ok(JqlAstNode::Call::<'a> {
+            name: source.get(name.span.start..name.span.end).ok_or(err)?,
+            args: args,
+        })
+    }
+
+    pub fn pipe(source: JqlAstNode<'a>, dest: JqlAstNode<'a>) -> Result<JqlAstNode<'a>, JqlError> {
+        Ok(JqlAstNode::Pipe {
+            source: Box::new(source),
+            dest: Box::new(dest),
+        })
+    }
+
+    pub fn identifier(token: &JqlToken, source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {
+        Ok(JqlAstNode::Access(
+            source.get(token.span.start..token.span.end).unwrap(),
+        ))
+    }
+
+    pub fn number(token: &JqlToken, source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {
+        if token.kind == JqlTokenKind::Number {
+            return Ok(JqlAstNode::Number(
+                source
+                    .get(token.span.start..token.span.end)
+                    .unwrap()
+                    .parse::<f32>()
+                    .unwrap(),
+            ));
+        }
+
+        Err(JqlError::new(
+            JqlErrorKind::UnexpectedToken {
+                expected: ExpectedSyntax::Token(JqlTokenKind::Number),
+                found: token.kind,
+            },
+            token.span,
+        ))
+    }
+
+    pub fn string(token: &JqlToken, source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {
+        if token.kind == JqlTokenKind::String {
+            return Ok(JqlAstNode::String(
+                source
+                    .get(token.span.start + 1..token.span.end - 1)
+                    .unwrap(),
+            ));
+        }
+
+        Err(JqlError::new(
+            JqlErrorKind::UnexpectedToken {
+                expected: ExpectedSyntax::Token(JqlTokenKind::String),
+                found: token.kind,
+            },
+            token.span,
+        ))
+    }
+
+    pub fn bool(token: &JqlToken, source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {
+        if token.kind == JqlTokenKind::Boolean {
+            let value_str = source.get(token.span.start..token.span.end).unwrap();
+            if value_str == "true" {
+                return Ok(JqlAstNode::Boolean(true));
+            }
+            if value_str == "false" {
+                return Ok(JqlAstNode::Boolean(false));
+            }
+        }
+
+        Err(JqlError::new(
+            JqlErrorKind::UnexpectedToken {
+                expected: ExpectedSyntax::Token(JqlTokenKind::Boolean),
+                found: token.kind,
+            },
+            token.span,
+        ))
+    }
+
+    pub fn null(token: &JqlToken) -> Result<JqlAstNode<'a>, JqlError> {
+        if token.kind == JqlTokenKind::Null {
+            return Ok(JqlAstNode::Null);
+        }
+        Err(JqlError::new(
+            JqlErrorKind::UnexpectedToken {
+                expected: ExpectedSyntax::Token(JqlTokenKind::Null),
+                found: token.kind,
+            },
+            token.span,
+        ))
+    }
+}
