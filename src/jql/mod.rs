@@ -4,6 +4,8 @@ pub(crate) mod ast;
 pub(crate) mod error;
 pub(crate) mod lexer;
 pub(crate) mod parser;
+pub mod proxy;
+pub(crate) mod reference;
 pub(crate) mod token;
 
 pub fn jql_parse<'a>(source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {

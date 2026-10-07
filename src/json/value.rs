@@ -1,5 +1,6 @@
 use std::{collections::HashMap, fmt::Display};
 
+use crate::Structured;
 use crate::json::{
     JsonDumpOptions,
     error::{ExpectedJsonType, JsonError, JsonErrorKind, JsonType},
@@ -52,8 +53,20 @@ impl JsonValue {
         let object = items.into_iter().collect();
         JsonValue::Object(object)
     }
+}
 
-    pub fn get(&self, key: &str) -> Result<&JsonValue, JsonError> {
+impl Structured for JsonValue {
+    type ErrorType = JsonError;
+
+    fn len(&self) -> Result<usize, JsonError> {
+        match self {
+            JsonValue::Object(elements) => Ok(elements.len()),
+            JsonValue::Array(items) => Ok(items.len()),
+            other => Err(type_mismatch(other, ExpectedJsonType::ArrayOrObject)),
+        }
+    }
+
+    fn get(&self, key: &str) -> Result<&JsonValue, JsonError> {
         match self {
             JsonValue::Array(items) => {
                 let index = parse_index(key)?;
@@ -73,7 +86,7 @@ impl JsonValue {
         }
     }
 
-    pub fn insert(&mut self, key: &str, element: JsonValue) -> Result<(), JsonError> {
+    fn insert(&mut self, key: &str, element: JsonValue) -> Result<(), JsonError> {
         match self {
             JsonValue::Object(object) => {
                 let _ = object.insert(key.to_string(), element);
@@ -94,15 +107,7 @@ impl JsonValue {
         }
     }
 
-    pub fn len(&self) -> Result<usize, JsonError> {
-        match self {
-            JsonValue::Object(elements) => Ok(elements.len()),
-            JsonValue::Array(items) => Ok(items.len()),
-            other => Err(type_mismatch(other, ExpectedJsonType::ArrayOrObject)),
-        }
-    }
-
-    pub fn push(&mut self, element: JsonValue) -> Result<(), JsonError> {
+    fn push(&mut self, element: JsonValue) -> Result<(), JsonError> {
         match self {
             JsonValue::Array(items) => {
                 items.push(element);
@@ -142,6 +147,7 @@ fn parse_index(key: &str) -> Result<usize, JsonError> {
 #[cfg(test)]
 mod tests {
     use super::JsonValue;
+    use crate::Structured;
     use crate::json::error::{ExpectedJsonType, JsonErrorKind, JsonType};
 
     #[test]

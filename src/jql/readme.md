@@ -43,6 +43,24 @@
 <string_value> ::= "\"" ([a-z] | [A-Z] | [0-9] | " ") "\""
 ```
 
+Grammar of access identifier
+
+```
+.jobs      -> List<Job>
+.jobs[1]   -> Job
+.jobs[]    -> Iterator<Job>
+.jobs[1,2] -> Iterator<Job>
+.jobs[1:3] -> Iterator<Job>
+
+.person{}           -> Iterator<Pair>
+.person{}@keys      -> Iterator<Pair[0]>
+.person{}@values    -> Iterator<Pair[1]>
+.person{name,age}   -> Iterator<Pair if Pair[0] in [name, age]>
+
+.jobs[]{}  -> Iterator<Job>
+.jobs[]{title,description} -> Iterator<Pair if Pair[0] in [title, description]>
+```
+
 ## Examples
 ```
 .[1] | filter(.id > 10 && .age < 20 && (.money > 10 || .gold >= 1))

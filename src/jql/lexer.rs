@@ -188,7 +188,9 @@ impl<'a> JqlLexer<'a> {
                 _ => JqlLexerState::InvalidToken,
             },
             JqlLexerState::InIdentifier => match c {
-                'a'..='z' | 'A'..='Z' | '0'..='9' | '[' | ']' => JqlLexerState::InIdentifier,
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '[' | ']' | '.' | '{' | '}' | ',' | ':' => {
+                    JqlLexerState::InIdentifier
+                }
                 _ => JqlLexerState::InvalidToken,
             },
             JqlLexerState::StartEqual => match c {
