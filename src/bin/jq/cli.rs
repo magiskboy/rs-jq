@@ -1,9 +1,7 @@
 use std::{fs::File, io::Read, str::FromStr};
 
 use crate::error::AppError;
-use rs_jq::jql::engine::Engine;
-use rs_jq::jql::jql_parse;
-use rs_jq::jql::proxy::Proxy;
+use rs_jq::jql::jql_execute;
 use rs_jq::json::{json_load, value::JsonValue};
 use structopt::StructOpt;
 
@@ -63,11 +61,9 @@ fn process(mut reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError
         .map_err(|_| AppError::InvalidInput)?;
 
     let json_value = json_load(&source).map_err(|err| AppError::ParseError(err.to_string()))?;
-    let ast = jql_parse(&opts.script).map_err(|err| AppError::ParseError(err.to_string()))?;
-    let proxy = Proxy::new(&json_value);
-    let result =
-        Engine::execute(proxy, &ast).map_err(|err| AppError::ParseError(err.to_string()))?;
-    Ok(result.data().clone())
+    let result = jql_execute(&json_value, &opts.script)
+        .map_err(|err| AppError::ParseError(err.to_string()))?;
+    Ok(result)
 }
 
 pub fn execute() -> Result<(), AppError> {

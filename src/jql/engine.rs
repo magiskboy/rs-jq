@@ -19,85 +19,113 @@ pub struct Engine {}
 impl Engine {
     pub fn execute<'a>(value: Proxy<'a>, path: &'a JqlAstNode<'_>) -> Result<Proxy<'a>, JqlError> {
         match path {
-            JqlAstNode::Null => Ok(Proxy::owned(JsonValue::Null)),
-            JqlAstNode::Boolean(val) => Ok(Proxy::owned(JsonValue::boolean(*val))),
-            JqlAstNode::String(st) => Ok(Proxy::owned(JsonValue::string(st.to_string()))),
-            JqlAstNode::Number(val) => Ok(Proxy::owned(JsonValue::number(*val))),
-            JqlAstNode::Access(path) => value.get(path),
-            JqlAstNode::Pipe { source, dest } => {
-                Self::execute(value, source).and_then(|r| Self::execute(r, dest))
-            }
-            JqlAstNode::Call { name, args } => match *name {
-                "filter" => filter(value, &args[0]),
-                _ => Err(op_not_support("Op is not supported")),
-            },
-            JqlAstNode::Binary { kind, left, right } => {
-                let left_proxy = Engine::execute(value.clone(), left)?;
-                let right_proxy = Engine::execute(value.clone(), right)?;
-                let left_output = left_proxy.data();
-                let right_output = right_proxy.data();
-                let result = match kind {
-                    JqlBinaryKind::And => {
-                        left_output.try_as_bool().map_err(json_exec_error)?
-                            && right_output.try_as_bool().map_err(json_exec_error)?
-                    }
-                    JqlBinaryKind::Or => {
-                        left_output.try_as_bool().map_err(json_exec_error)?
-                            || right_output.try_as_bool().map_err(json_exec_error)?
-                    }
-                    JqlBinaryKind::Equal => left_output == right_output,
-                    JqlBinaryKind::NotEqual => left_output != right_output,
-                    JqlBinaryKind::Greater => {
-                        left_output.try_cmp(right_output).map_err(json_exec_error)?
-                            == Ordering::Greater
-                    }
-                    JqlBinaryKind::Less => {
-                        left_output.try_cmp(right_output).map_err(json_exec_error)?
-                            == Ordering::Less
-                    }
-                    JqlBinaryKind::GreaterEqual => {
-                        left_output.try_cmp(right_output).map_err(json_exec_error)?
-                            != Ordering::Less
-                    }
-                    JqlBinaryKind::LessEqual => {
-                        left_output.try_cmp(right_output).map_err(json_exec_error)?
-                            != Ordering::Greater
-                    }
-                };
-                Ok(Proxy::owned(JsonValue::boolean(result)))
-            }
+            JqlAstNode::Null
+            | JqlAstNode::Boolean(_)
+            | JqlAstNode::Number(_)
+            | JqlAstNode::String(_) => Ok(Self::literal(path)),
+            JqlAstNode::Access(path) => Self::access(value, path),
+            JqlAstNode::Pipe { source, dest } => Self::pipe(value, source, dest),
+            JqlAstNode::Call { name, args } => Self::call(name, args, value),
+            JqlAstNode::Binary { kind, left, right } => Self::binary(kind, left, right, value),
             _ => Err(op_not_support("Op is not supported")),
         }
     }
-}
 
-fn filter<'a>(value: Proxy<'a>, predictive: &'a JqlAstNode) -> Result<Proxy<'a>, JqlError> {
-    println!("value = {:?}", value);
-    println!("predictive = {:?}", predictive);
-
-    let data = value.data();
-    match data {
-        JsonValue::Array(items) => {
-            let filtered = items
-                .clone()
-                .iter()
-                .filter(
-                    |x| match Engine::execute(Proxy::new(x), &predictive.clone()) {
-                        Ok(p) => matches!(p.data(), JsonValue::True),
-                        err => {
-                            println!("err = {:?}", err);
-                            false
-                        }
-                    },
-                )
-                .cloned()
-                .collect::<Vec<JsonValue>>();
-            Ok(Proxy::owned(JsonValue::array(filtered)))
+    fn literal<'a>(literal: &'a JqlAstNode<'a>) -> Proxy<'a> {
+        match literal {
+            JqlAstNode::Null => Proxy::owned(JsonValue::Null),
+            JqlAstNode::Boolean(val) => Proxy::owned(JsonValue::boolean(*val)),
+            JqlAstNode::String(st) => Proxy::owned(JsonValue::string(st.to_string())),
+            JqlAstNode::Number(val) => Proxy::owned(JsonValue::number(*val)),
+            _ => unreachable!(),
         }
-        _ => Err(JqlError::new(
-            JqlErrorKind::ExecutionError,
-            Span { start: 0, end: 0 },
-        )),
+    }
+
+    fn access<'a>(value: Proxy<'a>, path: &'a str) -> Result<Proxy<'a>, JqlError> {
+        value.get(path)
+    }
+
+    fn pipe<'a>(
+        value: Proxy<'a>,
+        source: &'a JqlAstNode<'a>,
+        dest: &'a JqlAstNode<'a>,
+    ) -> Result<Proxy<'a>, JqlError> {
+        Self::execute(value, source).and_then(|r| Self::execute(r, dest))
+    }
+
+    fn call<'a>(
+        name: &str,
+        args: &'a Vec<JqlAstNode<'a>>,
+        value: Proxy<'a>,
+    ) -> Result<Proxy<'a>, JqlError> {
+        match name {
+            "filter" => Self::filter(value, &args[0]),
+            _ => Err(op_not_support("Op is not supported")),
+        }
+    }
+
+    pub fn binary<'a>(
+        kind: &'a JqlBinaryKind,
+        left: &'a JqlAstNode<'a>,
+        right: &'a JqlAstNode<'a>,
+        value: Proxy<'a>,
+    ) -> Result<Proxy<'a>, JqlError> {
+        let left_proxy = Engine::execute(value.clone(), left)?;
+        let right_proxy = Engine::execute(value.clone(), right)?;
+        let left_output = left_proxy.data();
+        let right_output = right_proxy.data();
+        let result = match kind {
+            JqlBinaryKind::And => {
+                left_output.try_as_bool().map_err(json_exec_error)?
+                    && right_output.try_as_bool().map_err(json_exec_error)?
+            }
+            JqlBinaryKind::Or => {
+                left_output.try_as_bool().map_err(json_exec_error)?
+                    || right_output.try_as_bool().map_err(json_exec_error)?
+            }
+            JqlBinaryKind::Equal => left_output == right_output,
+            JqlBinaryKind::NotEqual => left_output != right_output,
+            JqlBinaryKind::Greater => {
+                left_output.try_cmp(right_output).map_err(json_exec_error)? == Ordering::Greater
+            }
+            JqlBinaryKind::Less => {
+                left_output.try_cmp(right_output).map_err(json_exec_error)? == Ordering::Less
+            }
+            JqlBinaryKind::GreaterEqual => {
+                left_output.try_cmp(right_output).map_err(json_exec_error)? != Ordering::Less
+            }
+            JqlBinaryKind::LessEqual => {
+                left_output.try_cmp(right_output).map_err(json_exec_error)? != Ordering::Greater
+            }
+        };
+        Ok(Proxy::owned(JsonValue::boolean(result)))
+    }
+
+    fn filter<'a>(value: Proxy<'a>, predictive: &'a JqlAstNode) -> Result<Proxy<'a>, JqlError> {
+        let data = value.data();
+        match data {
+            JsonValue::Array(items) => {
+                let filtered = items
+                    .clone()
+                    .iter()
+                    .filter(
+                        |x| match Engine::execute(Proxy::new(x), &predictive.clone()) {
+                            Ok(p) => matches!(p.data(), JsonValue::True),
+                            err => {
+                                println!("err = {:?}", err);
+                                false
+                            }
+                        },
+                    )
+                    .cloned()
+                    .collect::<Vec<JsonValue>>();
+                Ok(Proxy::owned(JsonValue::array(filtered)))
+            }
+            _ => Err(JqlError::new(
+                JqlErrorKind::ExecutionError,
+                Span { start: 0, end: 0 },
+            )),
+        }
     }
 }
 
@@ -437,11 +465,7 @@ mod tests {
         assert_ok(&data, ".count | . > 40", JsonValue::True);
         assert_ok(&data, ".count | . == 42", JsonValue::True);
         assert_ok(&data, ".jobs[0].title | . == \"Dev\"", JsonValue::True);
-        assert_ok(
-            &data,
-            ".matrix[0] | .[1] > 1 && .[1] < 3",
-            JsonValue::True,
-        );
+        assert_ok(&data, ".matrix[0] | .[1] > 1 && .[1] < 3", JsonValue::True);
     }
 
     #[test]

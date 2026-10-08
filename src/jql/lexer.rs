@@ -744,6 +744,7 @@ mod test {
             vec![
                 JqlTokenKind::Identifier,
                 JqlTokenKind::Pipe,
+                JqlTokenKind::Identifier,
                 JqlTokenKind::LParen,
                 JqlTokenKind::Identifier,
                 JqlTokenKind::GreaterOp,
