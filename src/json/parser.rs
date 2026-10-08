@@ -250,7 +250,7 @@ mod test {
         JsonValue,
         error::{ExpectedSyntax, JsonError, JsonErrorKind},
         parser::JsonParser,
-        token::{JsonTokenKind},
+        token::JsonTokenKind,
     };
     use crate::source::Span;
     use std::collections::HashMap;

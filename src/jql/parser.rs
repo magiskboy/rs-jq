@@ -98,10 +98,7 @@ impl JqlParser {
                                 )?);
                                 idx = end + 1;
                             } else {
-                                return Err(JqlError::new(
-                                    JqlErrorKind::UnclosedParen,
-                                    token.span,
-                                ));
+                                return Err(JqlError::new(JqlErrorKind::UnclosedParen, token.span));
                             }
                         } else {
                             idx += 1;
@@ -260,10 +257,7 @@ mod test {
             parse("10", &[(JqlTokenKind::Number, "10")]),
             Ok(number(10.0))
         );
-        assert_eq!(
-            parse("0", &[(JqlTokenKind::Number, "0")]),
-            Ok(number(0.0))
-        );
+        assert_eq!(parse("0", &[(JqlTokenKind::Number, "0")]), Ok(number(0.0)));
         assert_eq!(
             parse("\"hi\"", &[(JqlTokenKind::String, "\"hi\"")]),
             Ok(string("hi"))
@@ -330,12 +324,7 @@ mod test {
     #[test]
     fn comparison_operators() {
         let cases = [
-            (
-                "1 == 2",
-                JqlTokenKind::EqualOp,
-                "==",
-                JqlBinaryKind::Equal,
-            ),
+            ("1 == 2", JqlTokenKind::EqualOp, "==", JqlBinaryKind::Equal),
             (
                 "1 != 2",
                 JqlTokenKind::NotEqualOp,
@@ -502,7 +491,11 @@ mod test {
             Ok(binary(
                 JqlBinaryKind::And,
                 JqlAstNode::Boolean(true),
-                binary(JqlBinaryKind::Or, JqlAstNode::Boolean(false), JqlAstNode::Null),
+                binary(
+                    JqlBinaryKind::Or,
+                    JqlAstNode::Boolean(false),
+                    JqlAstNode::Null
+                ),
             ))
         );
         assert_eq!(
@@ -518,7 +511,11 @@ mod test {
             ),
             Ok(binary(
                 JqlBinaryKind::And,
-                binary(JqlBinaryKind::Or, JqlAstNode::Boolean(true), JqlAstNode::Boolean(false)),
+                binary(
+                    JqlBinaryKind::Or,
+                    JqlAstNode::Boolean(true),
+                    JqlAstNode::Boolean(false)
+                ),
                 JqlAstNode::Null,
             ))
         );
@@ -617,7 +614,11 @@ mod test {
             Ok(binary(
                 JqlBinaryKind::Or,
                 JqlAstNode::Boolean(true),
-                binary(JqlBinaryKind::And, JqlAstNode::Boolean(false), JqlAstNode::Null),
+                binary(
+                    JqlBinaryKind::And,
+                    JqlAstNode::Boolean(false),
+                    JqlAstNode::Null
+                ),
             ))
         );
     }
@@ -653,7 +654,11 @@ mod test {
             source.len(),
             source.len(),
         ));
-        toks.push(JqlToken::new(JqlTokenKind::Stop, source.len(), source.len()));
+        toks.push(JqlToken::new(
+            JqlTokenKind::Stop,
+            source.len(),
+            source.len(),
+        ));
         assert_eq!(
             JqlParser::parse(&toks, source),
             Ok(JqlAstNode::Boolean(true))

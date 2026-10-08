@@ -46,6 +46,8 @@ impl JsonType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpectedJsonType {
+    Boolean,
+    Number,
     Array,
     Object,
     ArrayOrObject,
@@ -54,6 +56,8 @@ pub enum ExpectedJsonType {
 impl ExpectedJsonType {
     fn name(self) -> &'static str {
         match self {
+            Self::Boolean => "boolean",
+            Self::Number => "number",
             Self::Array => "array",
             Self::Object => "object",
             Self::ArrayOrObject => "array or object",
@@ -285,6 +289,20 @@ mod tests {
                     found: JsonType::String,
                 }),
                 "value error: expected array or object but found string",
+            ),
+            (
+                JsonError::value(JsonErrorKind::TypeMismatch {
+                    expected: ExpectedJsonType::Boolean,
+                    found: JsonType::Null,
+                }),
+                "value error: expected boolean but found null",
+            ),
+            (
+                JsonError::value(JsonErrorKind::TypeMismatch {
+                    expected: ExpectedJsonType::Number,
+                    found: JsonType::String,
+                }),
+                "value error: expected number but found string",
             ),
             (
                 JsonError::value(JsonErrorKind::TypeMismatch {

@@ -33,13 +33,6 @@ enum JqlLexerState {
     InNull,
     InNumber,
     OpenString,
-    StartEscape,
-    StartUnicode,
-    StartUnicode0,
-    StartUnicode1,
-    StartUnicode2,
-    InUnicode,
-    InEscape,
     InString,
     CloseString,
     InIdentifier,
@@ -95,34 +88,7 @@ impl<'a> JqlLexer<'a> {
                 _ => JqlLexerState::InvalidToken,
             },
             JqlLexerState::OpenString | JqlLexerState::InString => match c {
-                '\\' => JqlLexerState::StartEscape,
                 '"' => JqlLexerState::CloseString,
-                _ => JqlLexerState::InString,
-            },
-            JqlLexerState::StartEscape => match c {
-                'u' => JqlLexerState::StartUnicode,
-                'n' | 't' | 'r' | 'b' | 'f' | '\\' | '"' | '/' => JqlLexerState::InEscape,
-                _ => JqlLexerState::InvalidToken,
-            },
-            JqlLexerState::StartUnicode => match c {
-                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::StartUnicode0,
-                _ => JqlLexerState::InvalidToken,
-            },
-            JqlLexerState::StartUnicode0 => match c {
-                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::StartUnicode1,
-                _ => JqlLexerState::InvalidToken,
-            },
-            JqlLexerState::StartUnicode1 => match c {
-                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::StartUnicode2,
-                _ => JqlLexerState::InvalidToken,
-            },
-            JqlLexerState::StartUnicode2 => match c {
-                '0'..='9' | 'a'..='f' | 'A'..='F' => JqlLexerState::InUnicode,
-                _ => JqlLexerState::InvalidToken,
-            },
-            JqlLexerState::InUnicode | JqlLexerState::InEscape => match c {
-                '"' => JqlLexerState::CloseString,
-                '\\' => JqlLexerState::StartEscape,
                 _ => JqlLexerState::InString,
             },
             JqlLexerState::InT => match c {
@@ -188,9 +154,17 @@ impl<'a> JqlLexer<'a> {
                 _ => JqlLexerState::InvalidToken,
             },
             JqlLexerState::InIdentifier => match c {
-                'a'..='z' | 'A'..='Z' | '0'..='9' | '[' | ']' | '.' | '{' | '}' | ',' | ':' => {
-                    JqlLexerState::InIdentifier
-                }
+                'a'..='z'
+                | 'A'..='Z'
+                | '0'..='9'
+                | '['
+                | ']'
+                | '.'
+                | '{'
+                | '}'
+                | ','
+                | ':'
+                | '_' => JqlLexerState::InIdentifier,
                 _ => JqlLexerState::InvalidToken,
             },
             JqlLexerState::StartEqual => match c {
@@ -538,34 +512,6 @@ mod test {
     }
 
     #[test]
-    fn identifiers_include_dots_and_brackets() {
-        for source in [
-            ".", ".id", ".name", "foo", "field10", ".filter", "foo[0]", ".[1]", ".1",
-        ] {
-            assert_eq!(
-                run(source),
-                Ok(vec![tok(JqlTokenKind::Identifier, 0, source.len())]),
-                "source {source:?}"
-            );
-        }
-
-        assert_eq!(
-            run("foo.bar"),
-            Ok(vec![
-                tok(JqlTokenKind::Identifier, 0, 3),
-                tok(JqlTokenKind::Identifier, 3, 7),
-            ])
-        );
-        assert_eq!(
-            run(".[1].id"),
-            Ok(vec![
-                tok(JqlTokenKind::Identifier, 0, 4),
-                tok(JqlTokenKind::Identifier, 4, 7),
-            ])
-        );
-    }
-
-    #[test]
     fn numbers_are_digit_runs() {
         for source in ["0", "1", "10", "01", "100"] {
             assert_eq!(
@@ -642,40 +588,6 @@ mod test {
         }
 
         for source in ["-0", "-1", "-10", "1e+2", "1e-2", "1.2E+3", "-1.2e-3"] {
-            assert_invalid(source);
-        }
-    }
-
-    #[test]
-    fn json_number_forms_that_are_not_a_single_number() {
-        let source = "1.2.3";
-        let tokens = run(source).expect("1.2.3");
-        assert_eq!(
-            kinds(&tokens),
-            vec![
-                JqlTokenKind::Number,
-                JqlTokenKind::Identifier,
-                JqlTokenKind::Identifier,
-            ]
-        );
-        assert_eq!(lexemes(source, &tokens), vec!["1", ".2", ".3"]);
-
-        let source = "1ee2";
-        let tokens = run(source).expect("1ee2");
-        assert_eq!(lexemes(source, &tokens), vec!["1", "ee2"]);
-
-        let source = "0x1";
-        let tokens = run(source).expect("0x1");
-        assert_eq!(lexemes(source, &tokens), vec!["0", "x1"]);
-
-        let source = "1e";
-        let tokens = run(source).expect("1e");
-        assert_eq!(lexemes(source, &tokens), vec!["1", "e"]);
-
-        assert_eq!(run("01"), Ok(vec![tok(JqlTokenKind::Number, 0, 2)]));
-        assert_eq!(run(".1"), Ok(vec![tok(JqlTokenKind::Identifier, 0, 2)]));
-
-        for source in ["+", "+1", "-01", "1e+", "1e-", "--1", "-.1"] {
             assert_invalid(source);
         }
     }

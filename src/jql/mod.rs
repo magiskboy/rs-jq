@@ -1,7 +1,9 @@
 use crate::jql::{ast::JqlAstNode, error::JqlError, lexer::JqlLexer, parser::JqlParser};
 
 pub(crate) mod ast;
+pub mod engine;
 pub(crate) mod error;
+pub mod funcs;
 pub(crate) mod lexer;
 pub(crate) mod parser;
 pub mod proxy;

@@ -32,6 +32,7 @@ pub enum JqlErrorKind {
         found: JqlTokenKind,
     },
     InvalidAccess,
+    ExecutionError,
 }
 
 impl JqlErrorKind {
@@ -42,7 +43,7 @@ impl JqlErrorKind {
             | Self::UnclosedParen
             | Self::InvalidExpression
             | Self::UnexpectedToken { .. } => "parse",
-            Self::InvalidAccess { .. } => "execute",
+            Self::InvalidAccess { .. } | Self::ExecutionError => "execute",
         }
     }
 
@@ -58,6 +59,7 @@ impl JqlErrorKind {
                 found.syntax_name(),
             )),
             Self::InvalidAccess => Cow::Borrowed("invalid reference"),
+            Self::ExecutionError => Cow::Borrowed("fail to execute"),
         }
     }
 }

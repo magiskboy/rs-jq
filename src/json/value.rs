@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{cmp::Ordering, collections::HashMap, fmt::Display};
 
 use crate::Structured;
 use crate::json::{
@@ -6,6 +6,18 @@ use crate::json::{
     error::{ExpectedJsonType, JsonError, JsonErrorKind, JsonType},
     json_dumps,
 };
+
+pub trait JsonOrd {
+    type ErrorType;
+
+    fn try_cmp(&self, other: &Self) -> Result<Ordering, Self::ErrorType>;
+}
+
+pub trait JsonLogic {
+    type ErrorType;
+
+    fn try_as_bool(&self) -> Result<bool, Self::ErrorType>;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonValue {
@@ -52,6 +64,35 @@ impl JsonValue {
     pub fn object(items: impl IntoIterator<Item = (String, JsonValue)>) -> JsonValue {
         let object = items.into_iter().collect();
         JsonValue::Object(object)
+    }
+}
+
+impl JsonOrd for JsonValue {
+    type ErrorType = JsonError;
+
+    fn try_cmp(&self, other: &Self) -> Result<Ordering, JsonError> {
+        match (self, other) {
+            (JsonValue::Number(l), JsonValue::Number(r)) => l.partial_cmp(r).ok_or_else(|| {
+                JsonError::value(JsonErrorKind::TypeMismatch {
+                    expected: ExpectedJsonType::Number,
+                    found: JsonType::Number,
+                })
+            }),
+            (JsonValue::Number(_), other) => Err(type_mismatch(other, ExpectedJsonType::Number)),
+            (other, _) => Err(type_mismatch(other, ExpectedJsonType::Number)),
+        }
+    }
+}
+
+impl JsonLogic for JsonValue {
+    type ErrorType = JsonError;
+
+    fn try_as_bool(&self) -> Result<bool, JsonError> {
+        match self {
+            JsonValue::True => Ok(true),
+            JsonValue::False => Ok(false),
+            other => Err(type_mismatch(other, ExpectedJsonType::Boolean)),
+        }
     }
 }
 
@@ -146,9 +187,74 @@ fn parse_index(key: &str) -> Result<usize, JsonError> {
 
 #[cfg(test)]
 mod tests {
-    use super::JsonValue;
+    use std::cmp::Ordering;
+
+    use super::{JsonLogic, JsonOrd, JsonValue};
     use crate::Structured;
     use crate::json::error::{ExpectedJsonType, JsonErrorKind, JsonType};
+
+    #[test]
+    fn try_cmp_orders_numbers_and_rejects_other_types() {
+        assert_eq!(
+            JsonValue::number(1.0)
+                .try_cmp(&JsonValue::number(2.0))
+                .unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            JsonValue::number(2.0)
+                .try_cmp(&JsonValue::number(2.0))
+                .unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            JsonValue::number(3.0)
+                .try_cmp(&JsonValue::number(2.0))
+                .unwrap(),
+            Ordering::Greater
+        );
+
+        assert_eq!(
+            JsonValue::True
+                .try_cmp(&JsonValue::number(1.0))
+                .unwrap_err()
+                .kind,
+            JsonErrorKind::TypeMismatch {
+                expected: ExpectedJsonType::Number,
+                found: JsonType::Boolean,
+            }
+        );
+        assert_eq!(
+            JsonValue::number(1.0)
+                .try_cmp(&JsonValue::string("a".to_string()))
+                .unwrap_err()
+                .kind,
+            JsonErrorKind::TypeMismatch {
+                expected: ExpectedJsonType::Number,
+                found: JsonType::String,
+            }
+        );
+    }
+
+    #[test]
+    fn try_as_bool_accepts_booleans_only() {
+        assert_eq!(JsonValue::True.try_as_bool().unwrap(), true);
+        assert_eq!(JsonValue::False.try_as_bool().unwrap(), false);
+        assert_eq!(
+            JsonValue::Null.try_as_bool().unwrap_err().kind,
+            JsonErrorKind::TypeMismatch {
+                expected: ExpectedJsonType::Boolean,
+                found: JsonType::Null,
+            }
+        );
+        assert_eq!(
+            JsonValue::number(1.0).try_as_bool().unwrap_err().kind,
+            JsonErrorKind::TypeMismatch {
+                expected: ExpectedJsonType::Boolean,
+                found: JsonType::Number,
+            }
+        );
+    }
 
     #[test]
     fn get_reports_missing_key_bad_index_and_type() {
