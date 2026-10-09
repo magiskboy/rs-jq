@@ -1,0 +1,168 @@
+{
+  "name": "Alice",
+  "count": 42,
+  "label": "root",
+  "flag": true,
+  "off": false,
+  "house": null,
+  "person": {
+    "name": "Alice",
+    "age": 30,
+    "city": "HN",
+    "role": "eng"
+  },
+  "jobs": [
+    {
+      "id": 1,
+      "title": "Dev",
+      "description": "Code",
+      "age": 25,
+      "money": 100,
+      "gold": 0,
+      "active": true,
+      "level": "senior"
+    },
+    {
+      "id": 2,
+      "title": "QA",
+      "description": "Test",
+      "age": 28,
+      "money": 50,
+      "gold": 2,
+      "active": true,
+      "level": "mid"
+    },
+    {
+      "id": 3,
+      "title": "PM",
+      "description": "Plan",
+      "age": 35,
+      "money": 5,
+      "gold": 0,
+      "active": false,
+      "level": "senior"
+    },
+    {
+      "id": 15,
+      "title": "SRE",
+      "description": "Ops",
+      "age": 18,
+      "money": 20,
+      "gold": 1,
+      "active": true,
+      "level": "junior"
+    }
+  ],
+  "people": [
+    {
+      "name": "Bob",
+      "age": 22,
+      "score": 90,
+      "vip": false,
+      "tags": ["a", "b"]
+    },
+    {
+      "name": "Carol",
+      "age": 40,
+      "score": 70,
+      "vip": true,
+      "tags": ["b"]
+    },
+    {
+      "name": "Dave",
+      "age": 30,
+      "score": 85,
+      "vip": true,
+      "tags": ["a", "c"]
+    }
+  ],
+  "candidates": [
+    {
+      "id": 5,
+      "age": 25,
+      "money": 1,
+      "gold": 0
+    },
+    {
+      "id": 15,
+      "age": 18,
+      "money": 20,
+      "gold": 0
+    },
+    {
+      "id": 20,
+      "age": 19,
+      "money": 5,
+      "gold": 2
+    },
+    {
+      "id": 12,
+      "age": 21,
+      "money": 50,
+      "gold": 0
+    }
+  ],
+  "matrix": [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9]
+  ],
+  "nested": [1, [2, [3]]],
+  "rows": [
+    [
+      {
+        "name": "a",
+        "value": 1
+      }
+    ],
+    [
+      {
+        "name": "b",
+        "value": 2
+      }
+    ]
+  ],
+  "company": {
+    "teams": [
+      {
+        "name": "platform",
+        "size": 8
+      },
+      {
+        "name": "data",
+        "size": 5
+      }
+    ],
+    "meta": {
+      "region": "APAC",
+      "tier": 1
+    }
+  },
+  "eq": {
+    "n": 1,
+    "s": "x",
+    "flag": true,
+    "xs": [1, 2],
+    "ys": [1, 2],
+    "zs": [1],
+    "obj": {
+      "k": "v"
+    },
+    "obj2": {
+      "k": "v"
+    },
+    "obj3": {
+      "k": "w"
+    }
+  },
+  "empty": {
+    "arr": [],
+    "obj": {}
+  },
+  "scalars": {
+    "zero": 0,
+    "negative": -10,
+    "fraction": 10.5
+  },
+  "mixed": [true, false, null, "x", 1, [], {}]
+}

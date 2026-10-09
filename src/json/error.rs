@@ -100,6 +100,7 @@ pub enum JsonErrorKind {
     InvalidIndex {
         key: String,
     },
+    InvalidCast,
 }
 
 impl JsonErrorKind {
@@ -120,7 +121,8 @@ impl JsonErrorKind {
             Self::TypeMismatch { .. }
             | Self::KeyNotFound { .. }
             | Self::IndexOutOfBounds { .. }
-            | Self::InvalidIndex { .. } => "value",
+            | Self::InvalidIndex { .. }
+            | Self::InvalidCast => "value",
         }
     }
 
@@ -157,6 +159,7 @@ impl JsonErrorKind {
                 Cow::Owned(format!("index {index} out of bounds for length {len}"))
             }
             Self::InvalidIndex { key } => Cow::Owned(format!("invalid index \"{key}\"")),
+            Self::InvalidCast => Cow::Borrowed("invalid cast"),
         }
     }
 }

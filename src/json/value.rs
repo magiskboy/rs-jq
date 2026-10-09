@@ -19,6 +19,13 @@ pub trait JsonLogic {
     fn try_as_bool(&self) -> Result<bool, Self::ErrorType>;
 }
 
+pub trait JsonNumber {
+    type ErrorType;
+
+    fn try_as_int(&self) -> Result<i32, Self::ErrorType>;
+    fn try_as_float(&self) -> Result<f32, Self::ErrorType>;
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonValue {
     String(String),
@@ -92,6 +99,52 @@ impl JsonLogic for JsonValue {
             JsonValue::True => Ok(true),
             JsonValue::False => Ok(false),
             other => Err(type_mismatch(other, ExpectedJsonType::Boolean)),
+        }
+    }
+}
+
+impl JsonNumber for JsonValue {
+    type ErrorType = JsonError;
+
+    fn try_as_int(&self) -> Result<i32, Self::ErrorType> {
+        let threshold = 1e-6_f32;
+
+        match self {
+            JsonValue::Number(v) => {
+                let x = *v;
+                if !x.is_finite() {
+                    return Err(JsonError {
+                        kind: JsonErrorKind::InvalidCast,
+                        span: None,
+                    });
+                }
+
+                // So sánh bằng f64 để tránh i32::MAX as f32 bị làm tròn lên.
+                let x64 = x as f64;
+                if x64 < i32::MIN as f64 || x64 > i32::MAX as f64 {
+                    return Err(JsonError {
+                        kind: JsonErrorKind::InvalidCast,
+                        span: None,
+                    });
+                }
+
+                if x.fract().abs() >= threshold {
+                    return Err(JsonError {
+                        kind: JsonErrorKind::InvalidCast,
+                        span: None,
+                    });
+                }
+
+                Ok(x as i32)
+            }
+            o => Err(type_mismatch(o, ExpectedJsonType::Number)),
+        }
+    }
+
+    fn try_as_float(&self) -> Result<f32, Self::ErrorType> {
+        match self {
+            JsonValue::Number(v) => Ok(*v),
+            o => Err(type_mismatch(o, ExpectedJsonType::Number)),
         }
     }
 }

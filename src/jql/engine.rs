@@ -60,7 +60,40 @@ impl Engine {
     ) -> Result<Proxy<'a>, JqlError> {
         match name {
             "filter" => Self::filter(value, &args[0]),
+            "len" => Self::len(value, &args[0]),
+            "sum" => Self::sum(value, &args[0]),
             _ => Err(op_not_support("Op is not supported")),
+        }
+    }
+
+    pub fn len<'a>(value: Proxy<'a>, path: &'a JqlAstNode<'a>) -> Result<Proxy<'a>, JqlError> {
+        let output = Self::execute(value, path)?;
+        let l = output.len()?;
+        Ok(Proxy::owned(l))
+    }
+
+    pub fn sum<'a>(value: Proxy<'a>, path: &'a JqlAstNode<'a>) -> Result<Proxy<'a>, JqlError> {
+        let output = Self::execute(value, path)?;
+        match output.data() {
+            JsonValue::Array(items) => {
+                let mut s = 0.0;
+                for item in items {
+                    match item {
+                        JsonValue::Number(v) => s += v,
+                        _ => {
+                            return Err(JqlError {
+                                kind: JqlErrorKind::ExecutionError,
+                                span: None,
+                            });
+                        }
+                    }
+                }
+                Ok(Proxy::owned(JsonValue::Number(s)))
+            }
+            _ => Err(JqlError::new(
+                JqlErrorKind::ExecutionError,
+                Span { start: 0, end: 0 },
+            )),
         }
     }
 
@@ -121,10 +154,10 @@ impl Engine {
                     .collect::<Vec<JsonValue>>();
                 Ok(Proxy::owned(JsonValue::array(filtered)))
             }
-            _ => Err(JqlError::new(
-                JqlErrorKind::ExecutionError,
-                Span { start: 0, end: 0 },
-            )),
+            _ => Err(JqlError {
+                kind: JqlErrorKind::ExecutionError,
+                span: None,
+            }),
         }
     }
 }
@@ -141,50 +174,10 @@ fn op_not_support(_: &str) -> JqlError {
 mod tests {
     use super::Engine;
     use crate::jql::error::{JqlError, JqlErrorKind};
+    use crate::jql::fixture::{at, sample};
     use crate::jql::jql_parse;
     use crate::jql::proxy::Proxy;
     use crate::json::value::JsonValue;
-
-    fn fixture() -> JsonValue {
-        JsonValue::object([
-            (
-                "matrix".to_string(),
-                JsonValue::array(vec![
-                    JsonValue::array(vec![
-                        JsonValue::number(1.0),
-                        JsonValue::number(2.0),
-                        JsonValue::number(3.0),
-                    ]),
-                    JsonValue::array(vec![
-                        JsonValue::number(4.0),
-                        JsonValue::number(5.0),
-                        JsonValue::number(6.0),
-                    ]),
-                ]),
-            ),
-            (
-                "nested".to_string(),
-                JsonValue::array(vec![
-                    JsonValue::number(1.0),
-                    JsonValue::array(vec![
-                        JsonValue::number(2.0),
-                        JsonValue::array(vec![JsonValue::number(3.0)]),
-                    ]),
-                ]),
-            ),
-            (
-                "jobs".to_string(),
-                JsonValue::array(vec![
-                    JsonValue::object([(
-                        "title".to_string(),
-                        JsonValue::string("Dev".to_string()),
-                    )]),
-                    JsonValue::object([("title".to_string(), JsonValue::string("QA".to_string()))]),
-                ]),
-            ),
-            ("count".to_string(), JsonValue::number(42.0)),
-        ])
-    }
 
     fn execute(data: &JsonValue, query: &str) -> Result<JsonValue, JqlError> {
         let ast = jql_parse(query)?;
@@ -218,38 +211,45 @@ mod tests {
 
     #[test]
     fn access_root() {
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, ".", data.clone());
     }
 
     #[test]
     fn access_property() {
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, ".count", JsonValue::number(42.0));
+        assert_ok(&data, ".name", JsonValue::string("Alice".to_string()));
+        assert_ok(&data, ".flag", JsonValue::True);
+        assert_ok(&data, ".off", JsonValue::False);
+        assert_ok(&data, ".house", JsonValue::Null);
     }
 
     #[test]
     fn access_array_index() {
-        let data = fixture();
+        let data = sample();
+        assert_ok(&data, ".jobs[1]", at(".jobs[1]"));
         assert_ok(
             &data,
-            ".jobs[1]",
-            JsonValue::object([("title".to_string(), JsonValue::string("QA".to_string()))]),
+            ".jobs[0].title",
+            JsonValue::string("Dev".to_string()),
         );
+        assert_ok(&data, ".jobs[3].id", JsonValue::number(15.0));
     }
 
     #[test]
     fn access_nested_array_via_dotted_index() {
         // Nested indexing uses empty-name property: .a[i].[j]
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, ".matrix[0].[1]", JsonValue::number(2.0));
         assert_ok(&data, ".matrix[1].[0]", JsonValue::number(4.0));
+        assert_ok(&data, ".matrix[2].[2]", JsonValue::number(9.0));
         assert_ok(&data, ".nested[1].[0]", JsonValue::number(2.0));
     }
 
     #[test]
     fn access_deeply_nested_array_via_dotted_index() {
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, ".nested[1].[1].[0]", JsonValue::number(3.0));
         assert_ok(
             &data,
@@ -261,50 +261,66 @@ mod tests {
             ".matrix[1].[0,2]",
             JsonValue::array(vec![JsonValue::number(4.0), JsonValue::number(6.0)]),
         );
+        assert_ok(
+            &data,
+            ".jobs[0,2]",
+            JsonValue::array(vec![at(".jobs[0]"), at(".jobs[2]")]),
+        );
+        assert_ok(
+            &data,
+            ".jobs[1:3]",
+            JsonValue::array(vec![at(".jobs[1]"), at(".jobs[2]")]),
+        );
     }
 
     #[test]
     fn access_root_nested_array_via_dotted_index() {
-        let data = JsonValue::array(vec![
-            JsonValue::array(vec![JsonValue::number(10.0), JsonValue::number(20.0)]),
-            JsonValue::array(vec![JsonValue::number(30.0), JsonValue::number(40.0)]),
-        ]);
-        assert_ok(&data, ".[0].[1]", JsonValue::number(20.0));
-        assert_ok(&data, ".[1].[0]", JsonValue::number(30.0));
+        let data = at(".matrix");
+        assert_ok(&data, ".[0].[1]", JsonValue::number(2.0));
+        assert_ok(&data, ".[1].[0]", JsonValue::number(4.0));
+        assert_ok(&data, ".[2].[1]", JsonValue::number(8.0));
     }
 
     #[test]
     fn access_nested_array_then_property() {
-        let data = JsonValue::object([(
-            "rows".to_string(),
-            JsonValue::array(vec![JsonValue::array(vec![JsonValue::object([(
-                "name".to_string(),
-                JsonValue::string("a".to_string()),
-            )])])]),
-        )]);
+        let data = sample();
         assert_ok(
             &data,
             ".rows[0].[0].name",
             JsonValue::string("a".to_string()),
         );
+        assert_ok(&data, ".rows[1].[0].value", JsonValue::number(2.0));
+        assert_ok(
+            &data,
+            ".company.teams[0].name",
+            JsonValue::string("platform".to_string()),
+        );
+        assert_ok(
+            &data,
+            ".company.meta.region",
+            JsonValue::string("APAC".to_string()),
+        );
     }
 
     #[test]
     fn consecutive_brackets_without_dot_are_accepted() {
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, ".matrix[0][1]", JsonValue::number(2.0));
         assert_ok(&data, ".nested[1][0]", JsonValue::number(2.0));
+        assert_ok(
+            &data,
+            ".rows[0][0].name",
+            JsonValue::string("a".to_string()),
+        );
 
-        let root = JsonValue::array(vec![
-            JsonValue::array(vec![JsonValue::number(10.0), JsonValue::number(20.0)]),
-            JsonValue::array(vec![JsonValue::number(30.0), JsonValue::number(40.0)]),
-        ]);
-        assert_ok(&root, ".[0][1]", JsonValue::number(20.0));
+        let root = at(".matrix");
+        assert_ok(&root, ".[0][1]", JsonValue::number(2.0));
+        assert_ok(&root, ".[2][0]", JsonValue::number(7.0));
     }
 
     #[test]
     fn pipe_chains_access() {
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, ".matrix[0] | .[1]", JsonValue::number(2.0));
         assert_ok(&data, ".nested[1] | .[1] | .[0]", JsonValue::number(3.0));
         assert_ok(
@@ -312,18 +328,28 @@ mod tests {
             ".jobs | .[0].title",
             JsonValue::string("Dev".to_string()),
         );
+        assert_ok(
+            &data,
+            ".company | .teams[1] | .name",
+            JsonValue::string("data".to_string()),
+        );
+        assert_ok(
+            &data,
+            ".people[2] | .tags[0]",
+            JsonValue::string("a".to_string()),
+        );
     }
 
     #[test]
     fn missing_property_is_execution_error() {
-        let data = fixture();
+        let data = sample();
         let err = execute(&data, ".missing").expect_err("should fail");
         assert_eq!(err.kind, JqlErrorKind::ExecutionError);
     }
 
     #[test]
     fn literals_return_json_values() {
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, "null", JsonValue::Null);
         assert_ok(&data, "true", JsonValue::True);
         assert_ok(&data, "false", JsonValue::False);
@@ -333,14 +359,14 @@ mod tests {
 
     #[test]
     fn unsupported_call_is_execution_error() {
-        let data = fixture();
+        let data = sample();
         let err = execute(&data, "unknown(.count)").expect_err("unknown call should fail");
         assert_eq!(err.kind, JqlErrorKind::ExecutionError);
     }
 
     #[test]
     fn compares_numbers_from_literals_and_fields() {
-        let data = fixture();
+        let data = sample();
         bool_cases(
             &data,
             &[
@@ -362,41 +388,17 @@ mod tests {
                 (".count <= 41", false),
                 (".matrix[0].[0] < .matrix[0].[1]", true),
                 (".matrix[1].[0] > .matrix[0].[2]", true),
+                (".scalars.negative < .scalars.zero", true),
+                (".scalars.fraction > 10", true),
+                (".jobs[0].money > .jobs[1].money", true),
+                (".company.meta.tier == 1", true),
             ],
         );
     }
 
     #[test]
     fn equality_is_structural_across_json_values() {
-        let data = JsonValue::object([
-            ("n".to_string(), JsonValue::number(1.0)),
-            ("s".to_string(), JsonValue::string("x".to_string())),
-            ("flag".to_string(), JsonValue::True),
-            (
-                "xs".to_string(),
-                JsonValue::array(vec![JsonValue::number(1.0), JsonValue::number(2.0)]),
-            ),
-            (
-                "ys".to_string(),
-                JsonValue::array(vec![JsonValue::number(1.0), JsonValue::number(2.0)]),
-            ),
-            (
-                "zs".to_string(),
-                JsonValue::array(vec![JsonValue::number(1.0)]),
-            ),
-            (
-                "obj".to_string(),
-                JsonValue::object([("k".to_string(), JsonValue::string("v".to_string()))]),
-            ),
-            (
-                "obj2".to_string(),
-                JsonValue::object([("k".to_string(), JsonValue::string("v".to_string()))]),
-            ),
-            (
-                "obj3".to_string(),
-                JsonValue::object([("k".to_string(), JsonValue::string("w".to_string()))]),
-            ),
-        ]);
+        let data = at(".eq");
         bool_cases(
             &data,
             &[
@@ -428,7 +430,7 @@ mod tests {
 
     #[test]
     fn logical_ops_combine_boolean_results() {
-        let data = fixture();
+        let data = sample();
         bool_cases(
             &data,
             &[
@@ -448,13 +450,17 @@ mod tests {
                 ("false || (.count == 42 && true)", true),
                 ("true && false || true", true),
                 ("false || false && true", false),
+                (".flag && .off", false),
+                (".flag || .off", true),
+                (".jobs[0].active && .jobs[2].active", false),
+                (".jobs[0].active || .jobs[2].active", true),
             ],
         );
     }
 
     #[test]
     fn comparisons_bind_tighter_than_logical_ops_at_runtime() {
-        let data = fixture();
+        let data = sample();
         // 1 > 2 && 3 < 4  => false && true => false
         assert_ok(&data, "1 > 2 && 3 < 4", JsonValue::False);
         // 1 < 2 || 3 > 4 => true || false => true
@@ -466,16 +472,135 @@ mod tests {
 
     #[test]
     fn binary_ops_work_after_pipe() {
-        let data = fixture();
+        let data = sample();
         assert_ok(&data, ".count | . > 40", JsonValue::True);
         assert_ok(&data, ".count | . == 42", JsonValue::True);
         assert_ok(&data, ".jobs[0].title | . == \"Dev\"", JsonValue::True);
         assert_ok(&data, ".matrix[0] | .[1] > 1 && .[1] < 3", JsonValue::True);
+        assert_ok(
+            &data,
+            ".people[1] | .vip == true && .score < 80",
+            JsonValue::True,
+        );
+    }
+
+    #[test]
+    fn filter_keeps_matching_array_items() {
+        let data = sample();
+        assert_ok(
+            &data,
+            ".jobs | filter(.active == true)",
+            JsonValue::array(vec![at(".jobs[0]"), at(".jobs[1]"), at(".jobs[3]")]),
+        );
+        assert_ok(
+            &data,
+            ".jobs | filter(.id > 2)",
+            JsonValue::array(vec![at(".jobs[2]"), at(".jobs[3]")]),
+        );
+        assert_ok(
+            &data,
+            ".people | filter(.vip == true)",
+            JsonValue::array(vec![at(".people[1]"), at(".people[2]")]),
+        );
+        assert_ok(&data, ".empty.arr | filter(.id > 0)", at(".empty.arr"));
+    }
+
+    #[test]
+    fn filter_supports_nested_logical_conditions() {
+        let data = sample();
+        // Readme-style predicate over candidates.
+        assert_ok(
+            &data,
+            ".candidates | filter(.id > 10 && .age < 20 && (.money > 10 || .gold >= 1))",
+            JsonValue::array(vec![at(".candidates[1]"), at(".candidates[2]")]),
+        );
+        assert_ok(
+            &data,
+            ".jobs | filter((.level == \"senior\" || .level == \"mid\") && .money >= 50)",
+            JsonValue::array(vec![at(".jobs[0]"), at(".jobs[1]")]),
+        );
+        assert_ok(
+            &data,
+            ".people | filter(.age >= 30 && (.score > 80 || .vip == true))",
+            JsonValue::array(vec![at(".people[1]"), at(".people[2]")]),
+        );
+        assert_ok(
+            &data,
+            ".jobs | filter(.active == false || (.age < 20 && .gold >= 1))",
+            JsonValue::array(vec![at(".jobs[2]"), at(".jobs[3]")]),
+        );
+    }
+
+    #[test]
+    fn filter_composes_with_selection_and_pipes() {
+        let data = sample();
+        assert_ok(
+            &data,
+            ".jobs[]{title,id} | filter(.id >= 3)",
+            JsonValue::array(vec![
+                JsonValue::object([
+                    ("title".to_string(), JsonValue::string("PM".to_string())),
+                    ("id".to_string(), JsonValue::number(3.0)),
+                ]),
+                JsonValue::object([
+                    ("title".to_string(), JsonValue::string("SRE".to_string())),
+                    ("id".to_string(), JsonValue::number(15.0)),
+                ]),
+            ]),
+        );
+        assert_ok(
+            &data,
+            ".company.teams | filter(.size > 5) | .[0].name",
+            JsonValue::string("platform".to_string()),
+        );
+        assert_ok(
+            &data,
+            ".people | filter(.vip == true) | .[0].name",
+            JsonValue::string("Carol".to_string()),
+        );
+        assert_ok(
+            &data,
+            ".matrix | filter(.[0] > 3) | .[0].[1]",
+            JsonValue::number(5.0),
+        );
+    }
+
+    #[test]
+    fn filter_on_non_array_is_execution_error() {
+        let data = sample();
+        assert_exec_err(&data, ".count | filter(. > 0)");
+        assert_exec_err(&data, ".person | filter(.age > 0)");
+        assert_exec_err(&data, ".name | filter(. == \"Alice\")");
+    }
+
+    #[test]
+    fn complex_pipeline_across_sample_document() {
+        let data = sample();
+        assert_ok(
+            &data,
+            ".jobs[0,3] | filter(.active == true) | .[1].title",
+            JsonValue::string("SRE".to_string()),
+        );
+        assert_ok(
+            &data,
+            ".candidates[1:3] | filter(.gold >= 1 || .money > 10) | .[0].id",
+            JsonValue::number(15.0),
+        );
+        assert_ok(
+            &data,
+            ".rows[0][0] | .value == 1 && .name == \"a\"",
+            JsonValue::True,
+        );
+        assert_ok(
+            &data,
+            ".eq | .xs == .ys && .obj == .obj2 && .flag == true",
+            JsonValue::True,
+        );
     }
 
     #[test]
     fn ordered_compare_fails_when_either_side_is_not_a_number() {
-        let data = fixture();
+        let data = sample();
         for query in [
             "true > false",
             "false < true",
@@ -496,7 +621,7 @@ mod tests {
 
     #[test]
     fn logical_ops_fail_when_a_used_operand_is_not_boolean() {
-        let data = fixture();
+        let data = sample();
         for query in [
             "true && 1",
             "1 && true",
@@ -516,7 +641,7 @@ mod tests {
 
     #[test]
     fn binary_ops_evaluate_both_operands() {
-        let data = fixture();
+        let data = sample();
         // Even when the left side alone would decide a boolean result, a
         // failing right operand still fails the whole expression.
         assert_exec_err(&data, "true || .missing");
@@ -532,7 +657,7 @@ mod tests {
 
     #[test]
     fn invalid_access_path_fails() {
-        let data = fixture();
+        let data = sample();
         assert_err(&data, ".jobs[");
         assert_err(&data, ".matrix[0].[");
     }
