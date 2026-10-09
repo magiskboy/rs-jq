@@ -10,7 +10,6 @@ use crate::{
         error::JsonError,
         value::{JsonLogic, JsonOrd, JsonValue},
     },
-    Span,
 };
 
 #[derive(Clone)]
@@ -27,7 +26,7 @@ impl Engine {
             JqlAstNode::Pipe { source, dest } => Self::pipe(value, source, dest),
             JqlAstNode::Call { name, args } => Self::call(name, args, value),
             JqlAstNode::Binary { kind, left, right } => Self::binary(kind, left, right, value),
-            _ => Err(op_not_support("Op is not supported")),
+            _ => Err(op_not_support("ast node")),
         }
     }
 
@@ -62,7 +61,7 @@ impl Engine {
             "filter" => Self::filter(value, &args[0]),
             "len" => Self::len(value, &args[0]),
             "sum" => Self::sum(value, &args[0]),
-            _ => Err(op_not_support("Op is not supported")),
+            other => Err(op_not_support(other)),
         }
     }
 
@@ -80,20 +79,20 @@ impl Engine {
                 for item in items {
                     match item {
                         JsonValue::Number(v) => s += v,
-                        _ => {
-                            return Err(JqlError {
-                                kind: JqlErrorKind::ExecutionError,
-                                span: None,
-                            });
+                        other => {
+                            return Err(JqlError::without_span(JqlErrorKind::TypeMismatch {
+                                expected: "number",
+                                found: json_value_type_name(other),
+                            }));
                         }
                     }
                 }
                 Ok(Proxy::owned(JsonValue::Number(s)))
             }
-            _ => Err(JqlError::new(
-                JqlErrorKind::ExecutionError,
-                Span { start: 0, end: 0 },
-            )),
+            other => Err(JqlError::without_span(JqlErrorKind::TypeMismatch {
+                expected: "array",
+                found: json_value_type_name(other),
+            })),
         }
     }
 
@@ -138,36 +137,42 @@ impl Engine {
         let data = value.data();
         match data {
             JsonValue::Array(items) => {
-                let filtered = items
-                    .clone()
-                    .iter()
-                    .filter(
-                        |x| match Engine::execute(Proxy::new(x), &predictive.clone()) {
-                            Ok(p) => matches!(p.data(), JsonValue::True),
-                            err => {
-                                println!("err = {:?}", err);
-                                false
-                            }
-                        },
-                    )
-                    .cloned()
-                    .collect::<Vec<JsonValue>>();
+                let mut filtered = Vec::new();
+                for x in items {
+                    let p = Engine::execute(Proxy::new(x), predictive)?;
+                    if matches!(p.data(), JsonValue::True) {
+                        filtered.push(x.clone());
+                    }
+                }
                 Ok(Proxy::owned(JsonValue::array(filtered)))
             }
-            _ => Err(JqlError {
-                kind: JqlErrorKind::ExecutionError,
-                span: None,
-            }),
+            other => Err(JqlError::without_span(JqlErrorKind::TypeMismatch {
+                expected: "array",
+                found: json_value_type_name(other),
+            })),
         }
     }
 }
 
-fn json_exec_error(_: JsonError) -> JqlError {
-    JqlError::from_kind(JqlErrorKind::ExecutionError)
+fn json_exec_error(err: JsonError) -> JqlError {
+    JqlError::from(err)
 }
 
-fn op_not_support(_: &str) -> JqlError {
-    JqlError::from_kind(JqlErrorKind::ExecutionError)
+fn op_not_support(op: &str) -> JqlError {
+    JqlError::without_span(JqlErrorKind::UnsupportedOperation {
+        op: op.to_string(),
+    })
+}
+
+fn json_value_type_name(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::True | JsonValue::False => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
 }
 
 #[cfg(test)]
@@ -196,9 +201,15 @@ mod tests {
 
     fn assert_exec_err(data: &JsonValue, query: &str) {
         let err = execute(data, query).expect_err(&format!("query {query:?} should fail"));
-        assert_eq!(
-            err.kind,
-            JqlErrorKind::ExecutionError,
+        assert!(
+            matches!(
+                err.kind,
+                JqlErrorKind::TypeMismatch { .. }
+                    | JqlErrorKind::PathNotFound { .. }
+                    | JqlErrorKind::UnsupportedOperation { .. }
+                    | JqlErrorKind::Json(_)
+                    | JqlErrorKind::InvalidAccess { .. }
+            ),
             "query {query:?} should be an execution error, got {err}"
         );
     }
@@ -344,7 +355,12 @@ mod tests {
     fn missing_property_is_execution_error() {
         let data = sample();
         let err = execute(&data, ".missing").expect_err("should fail");
-        assert_eq!(err.kind, JqlErrorKind::ExecutionError);
+        assert_eq!(
+            err.kind,
+            JqlErrorKind::PathNotFound {
+                path: "missing".to_string()
+            }
+        );
     }
 
     #[test]
@@ -361,7 +377,12 @@ mod tests {
     fn unsupported_call_is_execution_error() {
         let data = sample();
         let err = execute(&data, "unknown(.count)").expect_err("unknown call should fail");
-        assert_eq!(err.kind, JqlErrorKind::ExecutionError);
+        assert_eq!(
+            err.kind,
+            JqlErrorKind::UnsupportedOperation {
+                op: "unknown".to_string()
+            }
+        );
     }
 
     #[test]

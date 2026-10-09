@@ -18,7 +18,9 @@ impl FromStr for InputFormat {
         match s {
             "json" => Ok(InputFormat::JSON),
             "auto" => Ok(InputFormat::AUTO),
-            _ => Err(AppError::InvalidFormat),
+            other => Err(AppError::InvalidFormat(format!(
+                "invalid format \"{other}\", expected json or auto"
+            ))),
         }
     }
 }
@@ -38,31 +40,38 @@ struct Opts {
 
 impl Opts {
     pub fn validate(&self) -> Result<(), AppError> {
-        if self.input == String::from("") && self.format == InputFormat::AUTO {
-            return Err(AppError::InvalidFormat);
+        if self.input.is_empty() && self.format == InputFormat::AUTO {
+            return Err(AppError::InvalidFormat(
+                "input is required when format is auto".to_string(),
+            ));
         }
         Ok(())
     }
 }
 
-fn load_input(input: &String) -> Result<Box<dyn Read>, AppError> {
-    match input.as_str() {
+fn load_input(input: &str) -> Result<Box<dyn Read>, AppError> {
+    match input {
         "" => Ok(Box::new(std::io::stdin())),
-        _ => Ok(Box::new(
-            File::open(&input).map_err(|_| AppError::InvalidInput)?,
-        )),
+        path => Ok(Box::new(File::open(path).map_err(|source| AppError::Io {
+            path: Some(path.to_string()),
+            source,
+        })?)),
     }
 }
 
 fn process(mut reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError> {
     let mut source = String::new();
-    reader
-        .read_to_string(&mut source)
-        .map_err(|_| AppError::InvalidInput)?;
+    reader.read_to_string(&mut source).map_err(|err| AppError::Io {
+        path: if opts.input.is_empty() {
+            None
+        } else {
+            Some(opts.input.clone())
+        },
+        source: err,
+    })?;
 
-    let json_value = json_load(&source).map_err(|err| AppError::ParseError(err.to_string()))?;
-    let result = jql_execute(&json_value, &opts.script)
-        .map_err(|err| AppError::ParseError(err.to_string()))?;
+    let json_value = json_load(&source)?;
+    let result = jql_execute(&json_value, &opts.script)?;
     Ok(result)
 }
 

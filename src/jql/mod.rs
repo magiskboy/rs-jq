@@ -8,7 +8,7 @@ use crate::{
 
 pub(crate) mod ast;
 pub(crate) mod engine;
-pub(crate) mod error;
+pub mod error;
 pub(crate) mod lexer;
 pub(crate) mod parser;
 pub(crate) mod proxy;

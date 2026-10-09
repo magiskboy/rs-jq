@@ -22,8 +22,8 @@ impl<'a> Proxy<'a> {
         self.data
             .as_ref()
             .len()
-            .and_then(|l| Ok(JsonValue::number(l as f32)))
-            .map_err(|_| Self::execution_error())
+            .map(|l| JsonValue::number(l as f32))
+            .map_err(JqlError::from)
     }
 
     pub fn owned(data: JsonValue) -> Self {
@@ -36,8 +36,18 @@ impl<'a> Proxy<'a> {
         self.data.as_ref()
     }
 
-    fn execution_error() -> JqlError {
-        JqlError::from_kind(JqlErrorKind::ExecutionError)
+    fn type_mismatch(expected: &'static str, found: &JsonValue) -> JqlError {
+        JqlError::without_span(JqlErrorKind::TypeMismatch {
+            expected,
+            found: match found {
+                JsonValue::Null => "null",
+                JsonValue::True | JsonValue::False => "boolean",
+                JsonValue::Number(_) => "number",
+                JsonValue::String(_) => "string",
+                JsonValue::Array(_) => "array",
+                JsonValue::Object(_) => "object",
+            },
+        })
     }
 
     fn slice(value: &JsonValue, start: usize, end: usize) -> Result<JsonValue, JqlError> {
@@ -46,10 +56,12 @@ impl<'a> Proxy<'a> {
                 if let Some(values) = items.get(start..end) {
                     Ok(JsonValue::array(values.to_vec()))
                 } else {
-                    Err(Self::execution_error())
+                    Err(JqlError::without_span(JqlErrorKind::PathNotFound {
+                        path: format!("[{start}:{end}] (len {})", items.len()),
+                    }))
                 }
             }
-            _ => Err(Self::execution_error()),
+            other => Err(Self::type_mismatch("array", other)),
         }
     }
 
@@ -58,11 +70,17 @@ impl<'a> Proxy<'a> {
             JsonValue::Array(items) => {
                 let values = indices
                     .iter()
-                    .map(|i| items.get(*i).cloned().ok_or_else(Self::execution_error))
+                    .map(|i| {
+                        items.get(*i).cloned().ok_or_else(|| {
+                            JqlError::without_span(JqlErrorKind::PathNotFound {
+                                path: format!("[{i}] (len {})", items.len()),
+                            })
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(JsonValue::array(values))
             }
-            _ => Err(Self::execution_error()),
+            other => Err(Self::type_mismatch("array", other)),
         }
     }
 
@@ -71,20 +89,8 @@ impl<'a> Proxy<'a> {
             JsonValue::Array(items) => {
                 let values = items
                     .iter()
-                    .map(|x| match x {
-                        JsonValue::Object(h) => {
-                            let val = h.iter().filter_map(|(k, v)| {
-                                if keys.contains(k) {
-                                    return Some((k.clone(), v.clone()));
-                                } else {
-                                    None
-                                }
-                            });
-                            JsonValue::object(val)
-                        }
-                        _ => x.clone(),
-                    })
-                    .collect();
+                    .map(|x| Self::select_keys(x, keys))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(JsonValue::array(values))
             }
             JsonValue::Object(m) => {
@@ -97,18 +103,14 @@ impl<'a> Proxy<'a> {
                 });
                 Ok(JsonValue::object(val))
             }
-            _ => Err(Self::execution_error()),
+            other => Err(Self::type_mismatch("object or array", other)),
         }
     }
 
     fn descend(current: Cow<'a, JsonValue>, key: &str) -> Result<Cow<'a, JsonValue>, JqlError> {
         match current {
-            Cow::Borrowed(v) => Ok(Cow::Borrowed(
-                v.get(key).map_err(|_| Self::execution_error())?,
-            )),
-            Cow::Owned(v) => Ok(Cow::Owned(
-                v.get(key).map_err(|_| Self::execution_error())?.clone(),
-            )),
+            Cow::Borrowed(v) => Ok(Cow::Borrowed(v.get(key).map_err(JqlError::from)?)),
+            Cow::Owned(v) => Ok(Cow::Owned(v.get(key).map_err(JqlError::from)?.clone())),
         }
     }
 

@@ -34,6 +34,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn error(&self, kind: JsonErrorKind, span: Span) -> JsonError {
+        JsonError::new(kind, span, self.source.data)
+    }
+
     pub fn next_token(&mut self) -> Result<JsonToken, JsonError> {
         if self.index >= self.source.len() {
             return Ok(JsonToken {
@@ -124,7 +128,7 @@ impl<'a> Lexer<'a> {
             'n' => self.parse_literal(JsonTokenKind::Null)?,
             '0'..='9' | '-' => self.parse_number()?,
             _ => {
-                return Err(JsonError::new(
+                return Err(self.error(
                     JsonErrorKind::InvalidCharacter,
                     Span {
                         start: pos,
@@ -165,7 +169,7 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        Err(JsonError::new(
+        Err(self.error(
             JsonErrorKind::InvalidLiteral { expected },
             Span {
                 start,
@@ -248,7 +252,7 @@ impl<'a> Lexer<'a> {
         }
 
         if stopped_on_error {
-            return Err(JsonError::new(JsonErrorKind::InvalidNumber, span));
+            return Err(self.error(JsonErrorKind::InvalidNumber, span));
         }
 
         match state {
@@ -262,12 +266,12 @@ impl<'a> Lexer<'a> {
                 },
                 span.end,
             )),
-            _ => Err(JsonError::new(JsonErrorKind::InvalidNumber, span)),
+            _ => Err(self.error(JsonErrorKind::InvalidNumber, span)),
         }
     }
 
     fn invalid_number(&self, end: usize) -> JsonError {
-        JsonError::new(
+        self.error(
             JsonErrorKind::InvalidNumber,
             Span {
                 start: self.index,
@@ -325,7 +329,7 @@ impl<'a> Lexer<'a> {
 
                 let tail = source.slice_at(idx).unwrap_or("");
                 if tail.starts_with("\\u") {
-                    return Err(JsonError::new(
+                    return Err(self.error(
                         JsonErrorKind::InvalidUnicodeEscape,
                         Span {
                             start,
@@ -333,7 +337,7 @@ impl<'a> Lexer<'a> {
                         },
                     ));
                 }
-                return Err(JsonError::new(
+                return Err(self.error(
                     JsonErrorKind::InvalidEscape,
                     Span {
                         start,
@@ -352,7 +356,7 @@ impl<'a> Lexer<'a> {
                     idx + 1,
                 ));
             } else if let Some(ch) = c.filter(|ch| Self::must_be_escaped(*ch)) {
-                return Err(JsonError::new(
+                return Err(self.error(
                     JsonErrorKind::UnescapedControl,
                     Span {
                         start,
@@ -364,7 +368,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Err(JsonError::new(
+        Err(self.error(
             JsonErrorKind::UnterminatedString,
             Span {
                 start,
@@ -782,14 +786,17 @@ mod test {
         let err = run("@").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidCharacter);
         assert_eq!(err.span, Some(Span { start: 0, end: 1 }));
-        assert_eq!(err.to_string(), "lexical error at 0..1: invalid character");
+        assert_eq!(
+            err.to_string(),
+            "lexical error at 1:1 (0..1): invalid character"
+        );
 
         let err = run("tru").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::InvalidLiteral { expected: "true" });
         assert_eq!(err.span, Some(Span { start: 0, end: 3 }));
         assert_eq!(
             err.to_string(),
-            "lexical error at 0..3: invalid literal, expected true"
+            "lexical error at 1:1 (0..3): invalid literal, expected true"
         );
 
         let err = run("01").unwrap_err();

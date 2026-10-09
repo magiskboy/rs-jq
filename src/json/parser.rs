@@ -26,6 +26,7 @@ impl<'a> JsonParser<'a> {
                     start: 0,
                     end: source.len(),
                 },
+                source,
             ));
         }
 
@@ -44,10 +45,14 @@ impl<'a> JsonParser<'a> {
         }
     }
 
+    fn error(&self, kind: JsonErrorKind, span: Span) -> JsonError {
+        JsonError::new(kind, span, self.source)
+    }
+
     fn expect_eof(&self) -> Result<(), JsonError> {
         let next = self.current_token_idx + 1;
         if next < self.tokens.len() {
-            return Err(JsonError::new(
+            return Err(self.error(
                 JsonErrorKind::TrailingInput,
                 self.tokens[next].span,
             ));
@@ -146,7 +151,7 @@ impl<'a> JsonParser<'a> {
         let token = self.get_token().clone();
         if token.kind != kind {
             self.back_token();
-            return Err(JsonError::new(
+            return Err(self.error(
                 JsonErrorKind::UnexpectedToken {
                     expected: ExpectedSyntax::Token(kind),
                     found: token.kind,
@@ -165,7 +170,7 @@ impl<'a> JsonParser<'a> {
                 .last()
                 .map(|token| token.span.end)
                 .unwrap_or(self.source.len());
-            return Err(JsonError::new(
+            return Err(self.error(
                 JsonErrorKind::UnexpectedEof { expected },
                 Span { start: end, end },
             ));
@@ -187,7 +192,7 @@ impl<'a> JsonParser<'a> {
 
     fn unexpected(&self, expected: ExpectedSyntax) -> JsonError {
         let token = self.get_token();
-        JsonError::new(
+        self.error(
             JsonErrorKind::UnexpectedToken {
                 expected,
                 found: token.kind.clone(),
@@ -220,7 +225,7 @@ impl<'a> JsonParser<'a> {
             .get(token.span.start + 1..token.span.end - 1)
             .expect("string token span includes quotes");
         unescape_json_string(content)
-            .map_err(|err| JsonError::new(Self::unescape_kind(err), token.span))
+            .map_err(|err| self.error(Self::unescape_kind(err), token.span))
     }
 
     fn unescape_kind(err: UnescapeError) -> JsonErrorKind {
@@ -240,7 +245,7 @@ impl<'a> JsonParser<'a> {
             .expect("number token span is inside the source");
         content
             .parse::<f32>()
-            .map_err(|_| JsonError::new(JsonErrorKind::InvalidNumber, token.span))
+            .map_err(|_| self.error(JsonErrorKind::InvalidNumber, token.span))
     }
 }
 
@@ -603,7 +608,10 @@ mod test {
         let err = parse("").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::EmptyInput);
         assert_eq!(err.span, Some(Span { start: 0, end: 0 }));
-        assert_eq!(err.to_string(), "parse error at 0..0: empty input");
+        assert_eq!(
+            err.to_string(),
+            "parse error at 1:1 (0..0): empty input"
+        );
 
         let err = parse(" ").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::EmptyInput);
@@ -619,13 +627,16 @@ mod test {
         assert_eq!(err.span, Some(Span { start: 1, end: 1 }));
         assert_eq!(
             err.to_string(),
-            "parse error at 1..1: expected rbrace but reached end of input"
+            "parse error at 1:2 (1..1): expected '}' but reached end of input"
         );
 
         let err = parse("true false").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::TrailingInput);
         assert_eq!(err.span, Some(Span { start: 5, end: 10 }));
-        assert_eq!(err.to_string(), "parse error at 5..10: trailing input");
+        assert_eq!(
+            err.to_string(),
+            "parse error at 1:6 (5..10): trailing input"
+        );
 
         let err = parse("[1}").unwrap_err();
         assert_eq!(
@@ -638,7 +649,7 @@ mod test {
         assert_eq!(err.span, Some(Span { start: 2, end: 3 }));
         assert_eq!(
             err.to_string(),
-            "parse error at 2..3: expected rbracket but found rbrace"
+            "parse error at 1:3 (2..3): expected ']' but found '}'"
         );
 
         let err = parse(r#"{"a":}"#).unwrap_err();
@@ -655,7 +666,7 @@ mod test {
         assert_eq!(err.span, Some(Span { start: 0, end: 8 }));
         assert_eq!(
             err.to_string(),
-            "lexical error at 0..8: invalid surrogate pair"
+            "lexical error at 1:1 (0..8): invalid surrogate pair"
         );
     }
 }

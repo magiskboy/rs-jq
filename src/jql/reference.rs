@@ -63,7 +63,7 @@ impl Reference {
             ParseReferenceState::InProperty => {
                 let property = source
                     .get(start..end)
-                    .ok_or_else(Self::invalid_access)?
+                    .ok_or_else(|| Self::invalid_access(source))?
                     .to_string();
                 Ok(Access::PropertyAccess {
                     property,
@@ -74,7 +74,7 @@ impl Reference {
             ParseReferenceState::CloseArrayIndex => {
                 let s = source
                     .get(start..end - 1)
-                    .ok_or_else(Self::invalid_access)?;
+                    .ok_or_else(|| Self::invalid_access(source))?;
 
                 if s.is_empty() {
                     return Ok(Access::IndexAccess {
@@ -83,7 +83,7 @@ impl Reference {
                     });
                 }
 
-                if let Ok(index) = Self::parse_usize(s) {
+                if let Ok(index) = Self::parse_usize(s, source) {
                     return Ok(Access::IndexAccess {
                         index: ArrayIndex::Index(index),
                         properties: PropertySelection::All,
@@ -92,8 +92,8 @@ impl Reference {
 
                 let parts: Vec<&str> = s.split(':').collect();
                 if parts.len() == 2 {
-                    let start = Self::parse_usize(&parts[0])?;
-                    let end = Self::parse_usize(&parts[1])?;
+                    let start = Self::parse_usize(parts[0], source)?;
+                    let end = Self::parse_usize(parts[1], source)?;
                     return Ok(Access::IndexAccess {
                         index: ArrayIndex::Range { start, end },
                         properties: PropertySelection::All,
@@ -102,7 +102,7 @@ impl Reference {
 
                 let indices = s
                     .split(',')
-                    .map(Self::parse_usize)
+                    .map(|part| Self::parse_usize(part, source))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Access::IndexAccess {
                     index: ArrayIndex::MultipleIndex(indices),
@@ -113,11 +113,11 @@ impl Reference {
             ParseReferenceState::ClosePropertySelection => {
                 let s = source
                     .get(start..end - 1)
-                    .ok_or_else(Self::invalid_access)?;
+                    .ok_or_else(|| Self::invalid_access(source))?;
                 if let Some(lbrace) = s.find('{') {
                     let keys: Vec<String> = s
                         .get(lbrace + 1..)
-                        .ok_or_else(Self::invalid_access)?
+                        .ok_or_else(|| Self::invalid_access(source))?
                         .split(",")
                         .map(|x| x.to_string())
                         .filter(|x| !x.is_empty())
@@ -145,9 +145,9 @@ impl Reference {
                         },
                     });
                 }
-                Err(Self::invalid_access())
+                Err(Self::invalid_access(source))
             }
-            _ => Err(Self::invalid_access()),
+            _ => Err(Self::invalid_access(source)),
         }
     }
 
@@ -226,7 +226,7 @@ impl Reference {
                 _ => ParseReferenceState::InvalidCharacter,
             },
 
-            _ => todo!(),
+            _ => ParseReferenceState::InvalidCharacter,
         };
 
         match next_state {
@@ -235,12 +235,15 @@ impl Reference {
         }
     }
 
-    fn invalid_access() -> JqlError {
-        JqlError::from_kind(JqlErrorKind::InvalidAccess)
+    fn invalid_access(path: &str) -> JqlError {
+        JqlError::without_span(JqlErrorKind::InvalidAccess {
+            path: path.to_string(),
+        })
     }
 
-    fn parse_usize(raw: &str) -> Result<usize, JqlError> {
-        raw.parse::<usize>().map_err(|_| Self::invalid_access())
+    fn parse_usize(raw: &str, path: &str) -> Result<usize, JqlError> {
+        raw.parse::<usize>()
+            .map_err(|_| Self::invalid_access(path))
     }
 }
 
@@ -249,7 +252,7 @@ impl FromStr for Reference {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if !s.starts_with('.') {
-            return Err(Self::invalid_access());
+            return Err(Self::invalid_access(s));
         }
 
         // Root reference: identity over the current document.
@@ -272,9 +275,9 @@ impl FromStr for Reference {
         let mut start: usize = 1;
 
         while idx < s.len() {
-            let ch = s.chars().nth(idx).ok_or_else(Self::invalid_access)?;
+            let ch = s.chars().nth(idx).ok_or_else(|| Self::invalid_access(s))?;
             let Some(new_state) = Self::transition_table(&state, ch) else {
-                return Err(Self::invalid_access());
+                return Err(Self::invalid_access(s));
             };
 
             state = new_state;
@@ -329,7 +332,7 @@ impl FromStr for Reference {
             ParseReferenceState::InProperty
             | ParseReferenceState::CloseArrayIndex
             | ParseReferenceState::ClosePropertySelection => Ok(Self { access }),
-            _ => Err(Self::invalid_access()),
+            _ => Err(Self::invalid_access(s)),
         }
     }
 }
@@ -346,7 +349,14 @@ mod test {
 
     fn parse_err(source: &str) {
         let err = Reference::from_str(source).expect_err(&format!("should reject {source:?}"));
-        assert_eq!(err.kind, JqlErrorKind::InvalidAccess, "source {source:?}");
+        assert!(
+            matches!(
+                err.kind,
+                JqlErrorKind::InvalidAccess { ref path } if path == source
+            ),
+            "source {source:?}, got {:?}",
+            err.kind
+        );
     }
 
     fn root() -> Access {

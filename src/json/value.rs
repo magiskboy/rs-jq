@@ -113,26 +113,16 @@ impl JsonNumber for JsonValue {
             JsonValue::Number(v) => {
                 let x = *v;
                 if !x.is_finite() {
-                    return Err(JsonError {
-                        kind: JsonErrorKind::InvalidCast,
-                        span: None,
-                    });
+                    return Err(JsonError::value(JsonErrorKind::InvalidCast));
                 }
 
-                // So sánh bằng f64 để tránh i32::MAX as f32 bị làm tròn lên.
                 let x64 = x as f64;
                 if x64 < i32::MIN as f64 || x64 > i32::MAX as f64 {
-                    return Err(JsonError {
-                        kind: JsonErrorKind::InvalidCast,
-                        span: None,
-                    });
+                    return Err(JsonError::value(JsonErrorKind::InvalidCast));
                 }
 
                 if x.fract().abs() >= threshold {
-                    return Err(JsonError {
-                        kind: JsonErrorKind::InvalidCast,
-                        span: None,
-                    });
+                    return Err(JsonError::value(JsonErrorKind::InvalidCast));
                 }
 
                 Ok(x as i32)

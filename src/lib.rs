@@ -42,3 +42,35 @@ pub struct Span {
     pub start: usize,
     pub end: usize,
 }
+
+/// 1-based line and column for a byte offset into `source`.
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub struct Location {
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Location {
+    pub fn from_byte(source: &str, byte: usize) -> Self {
+        let (line, column) = line_col(source, byte);
+        Self { line, column }
+    }
+}
+
+/// Returns 1-based `(line, column)` for a byte index into `source`.
+pub fn line_col(source: &str, byte: usize) -> (usize, usize) {
+    let mut line = 1usize;
+    let mut column = 1usize;
+    for (i, ch) in source.char_indices() {
+        if i >= byte {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}

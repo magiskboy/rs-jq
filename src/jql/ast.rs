@@ -26,7 +26,7 @@ impl JqlBinaryKind {
             JqlTokenKind::GreaterEqualOp => Ok(Self::GreaterEqual),
             JqlTokenKind::NotEqualOp => Ok(Self::NotEqual),
             JqlTokenKind::EqualOp => Ok(Self::Equal),
-            _ => Err(JqlError::from_kind(JqlErrorKind::UnexpectedToken {
+            _ => Err(JqlError::without_span(JqlErrorKind::UnexpectedToken {
                 expected: ExpectedSyntax::BinaryOperator,
                 found: *kind,
             })),
@@ -86,6 +86,7 @@ impl<'a> JqlAstNode<'a> {
                 found: name.kind,
             },
             name.span,
+            source,
         );
         Ok(JqlAstNode::Call::<'a> {
             name: source.get(name.span.start..name.span.end).ok_or(err)?,
@@ -123,6 +124,7 @@ impl<'a> JqlAstNode<'a> {
                 found: token.kind,
             },
             token.span,
+            source,
         ))
     }
 
@@ -141,6 +143,7 @@ impl<'a> JqlAstNode<'a> {
                 found: token.kind,
             },
             token.span,
+            source,
         ))
     }
 
@@ -161,6 +164,7 @@ impl<'a> JqlAstNode<'a> {
                 found: token.kind,
             },
             token.span,
+            source,
         ))
     }
 
@@ -168,12 +172,13 @@ impl<'a> JqlAstNode<'a> {
         if token.kind == JqlTokenKind::Null {
             return Ok(JqlAstNode::Null);
         }
-        Err(JqlError::new(
-            JqlErrorKind::UnexpectedToken {
+        Err(JqlError {
+            kind: JqlErrorKind::UnexpectedToken {
                 expected: ExpectedSyntax::Token(JqlTokenKind::Null),
                 found: token.kind,
             },
-            token.span,
-        ))
+            span: Some(token.span),
+            location: None,
+        })
     }
 }

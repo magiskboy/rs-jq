@@ -3,8 +3,8 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use crate::Span;
 use crate::json::token::JsonTokenKind;
+use crate::{Location, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedSyntax {
@@ -32,7 +32,7 @@ pub enum JsonType {
 }
 
 impl JsonType {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Null => "null",
             Self::Boolean => "boolean",
@@ -54,7 +54,7 @@ pub enum ExpectedJsonType {
 }
 
 impl ExpectedJsonType {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Boolean => "boolean",
             Self::Number => "number",
@@ -168,18 +168,24 @@ impl JsonErrorKind {
 pub struct JsonError {
     pub kind: JsonErrorKind,
     pub span: Option<Span>,
+    pub location: Option<Location>,
 }
 
 impl JsonError {
-    pub fn new(kind: JsonErrorKind, span: Span) -> Self {
+    pub fn new(kind: JsonErrorKind, span: Span, source: &str) -> Self {
         Self {
             kind,
             span: Some(span),
+            location: Some(Location::from_byte(source, span.start)),
         }
     }
 
     pub fn value(kind: JsonErrorKind) -> Self {
-        Self { kind, span: None }
+        Self {
+            kind,
+            span: None,
+            location: None,
+        }
     }
 }
 
@@ -187,8 +193,18 @@ impl std::error::Error for JsonError {}
 
 impl Display for JsonError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self.span {
-            Some(span) => write!(
+        match (self.location, self.span) {
+            (Some(loc), Some(span)) => write!(
+                f,
+                "{} error at {}:{} ({}..{}): {}",
+                self.kind.phase(),
+                loc.line,
+                loc.column,
+                span.start,
+                span.end,
+                self.kind.message(),
+            ),
+            (None, Some(span)) => write!(
                 f,
                 "{} error at {}..{}: {}",
                 self.kind.phase(),
@@ -196,7 +212,7 @@ impl Display for JsonError {
                 span.end,
                 self.kind.message(),
             ),
-            None => write!(f, "{} error: {}", self.kind.phase(), self.kind.message()),
+            _ => write!(f, "{} error: {}", self.kind.phase(), self.kind.message()),
         }
     }
 }
@@ -208,7 +224,8 @@ mod tests {
     use crate::json::token::JsonTokenKind;
 
     fn err(kind: JsonErrorKind, start: usize, end: usize) -> JsonError {
-        JsonError::new(kind, Span { start, end })
+        let source = "x".repeat(end.max(1));
+        JsonError::new(kind, Span { start, end }, &source)
     }
 
     #[test]
@@ -216,39 +233,39 @@ mod tests {
         let cases = [
             (
                 err(JsonErrorKind::InvalidCharacter, 0, 1),
-                "lexical error at 0..1: invalid character",
+                "lexical error at 1:1 (0..1): invalid character",
             ),
             (
                 err(JsonErrorKind::InvalidLiteral { expected: "true" }, 0, 3),
-                "lexical error at 0..3: invalid literal, expected true",
+                "lexical error at 1:1 (0..3): invalid literal, expected true",
             ),
             (
                 err(JsonErrorKind::InvalidNumber, 0, 2),
-                "lexical error at 0..2: invalid number",
+                "lexical error at 1:1 (0..2): invalid number",
             ),
             (
                 err(JsonErrorKind::UnterminatedString, 0, 4),
-                "lexical error at 0..4: unterminated string",
+                "lexical error at 1:1 (0..4): unterminated string",
             ),
             (
                 err(JsonErrorKind::InvalidEscape, 0, 3),
-                "lexical error at 0..3: invalid escape",
+                "lexical error at 1:1 (0..3): invalid escape",
             ),
             (
                 err(JsonErrorKind::InvalidUnicodeEscape, 0, 4),
-                "lexical error at 0..4: invalid unicode escape",
+                "lexical error at 1:1 (0..4): invalid unicode escape",
             ),
             (
                 err(JsonErrorKind::InvalidSurrogatePair, 0, 8),
-                "lexical error at 0..8: invalid surrogate pair",
+                "lexical error at 1:1 (0..8): invalid surrogate pair",
             ),
             (
                 err(JsonErrorKind::UnescapedControl, 1, 2),
-                "lexical error at 1..2: unescaped control character",
+                "lexical error at 1:2 (1..2): unescaped control character",
             ),
             (
                 err(JsonErrorKind::EmptyInput, 0, 0),
-                "parse error at 0..0: empty input",
+                "parse error at 1:1 (0..0): empty input",
             ),
             (
                 err(
@@ -259,7 +276,7 @@ mod tests {
                     3,
                     4,
                 ),
-                "parse error at 3..4: expected colon but found number",
+                "parse error at 1:4 (3..4): expected ':' but found number",
             ),
             (
                 err(
@@ -270,7 +287,7 @@ mod tests {
                     2,
                     3,
                 ),
-                "parse error at 2..3: expected value but found comma",
+                "parse error at 1:3 (2..3): expected value but found ','",
             ),
             (
                 err(
@@ -280,11 +297,11 @@ mod tests {
                     1,
                     1,
                 ),
-                "parse error at 1..1: expected rbrace but reached end of input",
+                "parse error at 1:2 (1..1): expected '}' but reached end of input",
             ),
             (
                 err(JsonErrorKind::TrailingInput, 5, 10),
-                "parse error at 5..10: trailing input",
+                "parse error at 1:6 (5..10): trailing input",
             ),
             (
                 JsonError::value(JsonErrorKind::TypeMismatch {
@@ -329,6 +346,10 @@ mod tests {
                     key: "name".to_string(),
                 }),
                 "value error: invalid index \"name\"",
+            ),
+            (
+                JsonError::value(JsonErrorKind::InvalidCast),
+                "value error: invalid cast",
             ),
         ];
 

@@ -3,12 +3,13 @@ use crate::jql::{
         JqlAstNode::{self},
         JqlBinaryKind,
     },
-    error::{JqlError, JqlErrorKind},
+    error::{ExpectedSyntax, JqlError, JqlErrorKind},
     token::{
         JqlToken,
         JqlTokenKind::{self},
     },
 };
+use crate::Span;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -16,7 +17,7 @@ pub struct JqlParser;
 
 impl JqlParser {
     pub fn parse<'a>(tokens: &Vec<JqlToken>, source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {
-        let mut operator_stack = VecDeque::<JqlTokenKind>::new();
+        let mut operator_stack = VecDeque::<JqlToken>::new();
         let mut operand_stack = VecDeque::<JqlAstNode>::new();
 
         let mut idx: usize = 0;
@@ -27,25 +28,25 @@ impl JqlParser {
             match token.kind {
                 JqlTokenKind::LParen => {
                     idx += 1;
-                    operator_stack.push_front(JqlTokenKind::LParen);
+                    operator_stack.push_front(token);
                 }
                 JqlTokenKind::RParen => {
                     idx += 1;
-                    while let Some(token_kind) = operator_stack.pop_front() {
-                        if token_kind == JqlTokenKind::LParen {
+                    while let Some(op) = operator_stack.pop_front() {
+                        if op.kind == JqlTokenKind::LParen {
                             break;
                         }
 
-                        let right = operand_stack
-                            .pop_front()
-                            .ok_or(JqlError::from_kind(JqlErrorKind::MissingOperand))?;
-                        let left = operand_stack
-                            .pop_front()
-                            .ok_or(JqlError::from_kind(JqlErrorKind::MissingOperand))?;
-                        let node = match token_kind {
+                        let right = operand_stack.pop_front().ok_or_else(|| {
+                            JqlError::new(JqlErrorKind::MissingOperand, token.span, source)
+                        })?;
+                        let left = operand_stack.pop_front().ok_or_else(|| {
+                            JqlError::new(JqlErrorKind::MissingOperand, token.span, source)
+                        })?;
+                        let node = match op.kind {
                             JqlTokenKind::Pipe => JqlAstNode::pipe(left, right)?,
                             _ => JqlAstNode::binary(
-                                JqlBinaryKind::from_token_kind(&token_kind)?,
+                                JqlBinaryKind::from_token_kind(&op.kind)?,
                                 left,
                                 right,
                             )?,
@@ -98,7 +99,11 @@ impl JqlParser {
                                 )?);
                                 idx = end + 1;
                             } else {
-                                return Err(JqlError::new(JqlErrorKind::UnclosedParen, token.span));
+                                return Err(JqlError::new(
+                                    JqlErrorKind::UnclosedParen,
+                                    token.span,
+                                    source,
+                                ));
                             }
                         } else {
                             idx += 1;
@@ -119,18 +124,18 @@ impl JqlParser {
                 | JqlTokenKind::AndLogicalOp
                 | JqlTokenKind::OrLogicalOp => {
                     while let Some(top) = operator_stack.pop_front() {
-                        if top > token.kind {
-                            let right = operand_stack
-                                .pop_front()
-                                .ok_or(JqlError::from_kind(JqlErrorKind::MissingOperand))?;
-                            let left = operand_stack
-                                .pop_front()
-                                .ok_or(JqlError::from_kind(JqlErrorKind::MissingOperand))?;
+                        if top.kind > token.kind {
+                            let right = operand_stack.pop_front().ok_or_else(|| {
+                                JqlError::new(JqlErrorKind::MissingOperand, token.span, source)
+                            })?;
+                            let left = operand_stack.pop_front().ok_or_else(|| {
+                                JqlError::new(JqlErrorKind::MissingOperand, token.span, source)
+                            })?;
 
-                            let node = match top {
+                            let node = match top.kind {
                                 JqlTokenKind::Pipe => JqlAstNode::pipe(left, right)?,
                                 _ => JqlAstNode::binary(
-                                    JqlBinaryKind::from_token_kind(&top)?,
+                                    JqlBinaryKind::from_token_kind(&top.kind)?,
                                     left,
                                     right,
                                 )?,
@@ -142,30 +147,49 @@ impl JqlParser {
                         }
                     }
                     idx += 1;
-                    operator_stack.push_front(token.kind);
+                    operator_stack.push_front(token);
                 }
-                _ => {
+                JqlTokenKind::Whitespace | JqlTokenKind::Stop => {
                     idx += 1;
+                }
+                other => {
+                    return Err(JqlError::new(
+                        JqlErrorKind::UnexpectedToken {
+                            expected: ExpectedSyntax::Expression,
+                            found: other,
+                        },
+                        token.span,
+                        source,
+                    ));
                 }
             }
         }
 
         while let Some(top_token) = operator_stack.pop_front() {
-            let right = operand_stack
-                .pop_front()
-                .ok_or(JqlError::from_kind(JqlErrorKind::MissingOperand))?;
-            let left = operand_stack
-                .pop_front()
-                .ok_or(JqlError::from_kind(JqlErrorKind::MissingOperand))?;
-            let node = match top_token {
+            let right = operand_stack.pop_front().ok_or_else(|| {
+                JqlError::new(JqlErrorKind::MissingOperand, top_token.span, source)
+            })?;
+            let left = operand_stack.pop_front().ok_or_else(|| {
+                JqlError::new(JqlErrorKind::MissingOperand, top_token.span, source)
+            })?;
+            let node = match top_token.kind {
                 JqlTokenKind::Pipe => JqlAstNode::pipe(left, right)?,
-                _ => JqlAstNode::binary(JqlBinaryKind::from_token_kind(&top_token)?, left, right)?,
+                _ => {
+                    JqlAstNode::binary(JqlBinaryKind::from_token_kind(&top_token.kind)?, left, right)?
+                }
             };
             operand_stack.push_front(node);
         }
 
         if operand_stack.len() != 1 {
-            return Err(JqlError::from_kind(JqlErrorKind::InvalidExpression));
+            return Err(JqlError::new(
+                JqlErrorKind::InvalidExpression,
+                Span {
+                    start: 0,
+                    end: source.len(),
+                },
+                source,
+            ));
         }
 
         Ok(operand_stack.pop_front().unwrap())
@@ -640,7 +664,7 @@ mod test {
     }
 
     #[test]
-    fn ignored_token_kinds_are_skipped() {
+    fn whitespace_and_stop_tokens_are_skipped() {
         let source = " true";
         let mut toks = tokens(
             source,
@@ -650,11 +674,6 @@ mod test {
             ],
         );
         toks.push(JqlToken::new(
-            JqlTokenKind::InvalidToken,
-            source.len(),
-            source.len(),
-        ));
-        toks.push(JqlToken::new(
             JqlTokenKind::Stop,
             source.len(),
             source.len(),
@@ -663,6 +682,25 @@ mod test {
             JqlParser::parse(&toks, source),
             Ok(JqlAstNode::Boolean(true))
         );
+    }
+
+    #[test]
+    fn unexpected_token_kinds_are_errors() {
+        let source = "true";
+        let mut toks = tokens(source, &[(JqlTokenKind::Boolean, "true")]);
+        toks.push(JqlToken::new(
+            JqlTokenKind::InvalidToken,
+            source.len(),
+            source.len(),
+        ));
+        let err = JqlParser::parse(&toks, source).unwrap_err();
+        assert!(matches!(
+            err.kind,
+            JqlErrorKind::UnexpectedToken {
+                expected: crate::jql::error::ExpectedSyntax::Expression,
+                found: JqlTokenKind::InvalidToken,
+            }
+        ));
     }
 
     #[test]
@@ -718,7 +756,7 @@ mod test {
     fn empty_input_is_invalid_expression() {
         let err = parse("", &[]).unwrap_err();
         assert_eq!(err.kind, JqlErrorKind::InvalidExpression);
-        assert_eq!(err.span, None);
+        assert_eq!(err.span, Some(Span { start: 0, end: 0 }));
     }
 
     #[test]
@@ -732,7 +770,7 @@ mod test {
         )
         .unwrap_err();
         assert_eq!(err.kind, JqlErrorKind::InvalidExpression);
-        assert_eq!(err.span, None);
+        assert_eq!(err.span, Some(Span { start: 0, end: 10 }));
     }
 
     #[test]
@@ -747,7 +785,7 @@ mod test {
         )
         .unwrap_err();
         assert_eq!(err.kind, JqlErrorKind::InvalidExpression);
-        assert_eq!(err.span, None);
+        assert_eq!(err.span, Some(Span { start: 0, end: 8 }));
     }
 
     #[test]
@@ -776,7 +814,7 @@ mod test {
         for (source, parts) in cases {
             let err = parse(source, parts).unwrap_err();
             assert_eq!(err.kind, JqlErrorKind::MissingOperand, "source {source:?}");
-            assert_eq!(err.span, None, "source {source:?}");
+            assert!(err.span.is_some(), "source {source:?}");
         }
     }
 
@@ -784,7 +822,7 @@ mod test {
     fn lone_rparen_is_invalid_expression() {
         let err = parse(")", &[(JqlTokenKind::RParen, ")")]).unwrap_err();
         assert_eq!(err.kind, JqlErrorKind::InvalidExpression);
-        assert_eq!(err.span, None);
+        assert_eq!(err.span, Some(Span { start: 0, end: 1 }));
     }
 
     #[test]
@@ -805,10 +843,16 @@ mod test {
     #[test]
     fn parse_errors_carry_kind_and_display() {
         let err = parse("", &[]).unwrap_err();
-        assert_eq!(err.to_string(), "parse error: unterminated token");
+        assert_eq!(
+            err.to_string(),
+            "parse error at 1:1 (0..0): invalid expression"
+        );
 
         let err = parse(">", &[(JqlTokenKind::GreaterOp, ">")]).unwrap_err();
-        assert_eq!(err.to_string(), "parse error: expected an operand");
+        assert_eq!(
+            err.to_string(),
+            "parse error at 1:1 (0..1): expected an operand"
+        );
 
         let err = parse(
             "filter(.id",
@@ -821,7 +865,7 @@ mod test {
         .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "parse error at 0..6: expected a closed parenthesis"
+            "parse error at 1:1 (0..6): expected a closed parenthesis"
         );
     }
 }

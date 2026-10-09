@@ -292,6 +292,7 @@ impl<'a> JqlLexer<'a> {
                 start,
                 end: self.index,
             },
+            self.source.data,
         ))
     }
 
