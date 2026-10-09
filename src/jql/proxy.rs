@@ -101,53 +101,68 @@ impl<'a> Proxy<'a> {
         }
     }
 
+    fn descend(current: Cow<'a, JsonValue>, key: &str) -> Result<Cow<'a, JsonValue>, JqlError> {
+        match current {
+            Cow::Borrowed(v) => Ok(Cow::Borrowed(
+                v.get(key).map_err(|_| Self::execution_error())?,
+            )),
+            Cow::Owned(v) => Ok(Cow::Owned(
+                v.get(key).map_err(|_| Self::execution_error())?.clone(),
+            )),
+        }
+    }
+
+    fn apply_selection(
+        current: Cow<'a, JsonValue>,
+        properties: PropertySelection,
+    ) -> Result<Cow<'a, JsonValue>, JqlError> {
+        match properties {
+            PropertySelection::All => Ok(current),
+            PropertySelection::Properties(keys) => {
+                Ok(Cow::Owned(Self::select_keys(current.as_ref(), &keys)?))
+            }
+        }
+    }
+
     pub fn get(&self, ref_str: &str) -> Result<Proxy<'a>, JqlError> {
         let jref = Reference::from_str(ref_str)?;
-        let mut current = self.data.as_ref().clone();
+        // Re-borrow root with lifetime `'a` when possible; only clone if already owned.
+        let mut current = match &self.data {
+            Cow::Borrowed(v) => Cow::Borrowed(*v),
+            Cow::Owned(v) => Cow::Owned(v.clone()),
+        };
 
         for access in jref.access {
-            let value = match access {
+            current = match access {
                 Access::PropertyAccess {
                     property,
                     properties,
                 } => {
                     // Empty name is the root ref: operate on the current value as-is.
-                    let new = if property.is_empty() {
-                        &current
-                    } else {
+                    let next = if property.is_empty() {
                         current
-                            .get(&property)
-                            .map_err(|_| Self::execution_error())?
+                    } else {
+                        Self::descend(current, &property)?
                     };
-                    match properties {
-                        PropertySelection::Properties(keys) => Self::select_keys(new, &keys)?,
-                        _ => new.clone(),
-                    }
+                    Self::apply_selection(next, properties)?
                 }
                 Access::IndexAccess { index, properties } => {
-                    let new = match index {
-                        ArrayIndex::Index(index) => current
-                            .get(&index.to_string())
-                            .map_err(|_| Self::execution_error())?
-                            .clone(),
-                        ArrayIndex::Range { start, end } => Self::slice(&current, start, end)?,
-                        ArrayIndex::MultipleIndex(indices) => Self::select(&current, indices)?,
-                        _ => current.clone(),
+                    let next = match index {
+                        ArrayIndex::All => current,
+                        ArrayIndex::Index(index) => Self::descend(current, &index.to_string())?,
+                        ArrayIndex::Range { start, end } => {
+                            Cow::Owned(Self::slice(current.as_ref(), start, end)?)
+                        }
+                        ArrayIndex::MultipleIndex(indices) => {
+                            Cow::Owned(Self::select(current.as_ref(), indices)?)
+                        }
                     };
-
-                    match properties {
-                        PropertySelection::Properties(keys) => Self::select_keys(&new, &keys)?,
-                        _ => new.clone(),
-                    }
+                    Self::apply_selection(next, properties)?
                 }
             };
-
-            current = value;
         }
 
-        Ok(Proxy {
-            data: Cow::Owned(current),
-        })
+        Ok(Proxy { data: current })
     }
 }
 
