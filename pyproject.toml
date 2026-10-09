@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rjson"
+version = "0.1.0"
+requires-python = ">=3.9"
+description = "Python bindings for rs-jq JSON parser"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+bindings = "pyo3"
+# Cargo feature that enables pyo3 + #[pymodule] rjson
+features = ["python"]
+# Must match #[pymodule] mod rjson in src/python.rs
+module-name = "rjson"

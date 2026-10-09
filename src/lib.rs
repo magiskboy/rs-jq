@@ -1,6 +1,9 @@
 pub mod jql;
 pub mod json;
 
+#[cfg(feature = "python")]
+mod python;
+
 pub trait Structured {
     type ErrorType;
 

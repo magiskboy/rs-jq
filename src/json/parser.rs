@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 
+use crate::Location;
 use crate::Span;
 use crate::json::{
     error::{ExpectedSyntax, JsonError, JsonErrorKind},
@@ -8,7 +9,6 @@ use crate::json::{
     token::{JsonLexeme, JsonToken, JsonTokenKind},
     value::JsonValue,
 };
-use crate::Location;
 
 pub struct JsonParser<R: Read> {
     lexer: Lexer<R>,
@@ -641,10 +641,7 @@ mod test {
         let err = parse("").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::EmptyInput);
         assert_eq!(err.span, Some(Span { start: 0, end: 0 }));
-        assert_eq!(
-            err.to_string(),
-            "parse error at 1:1 (0..0): empty input"
-        );
+        assert_eq!(err.to_string(), "parse error at 1:1 (0..0): empty input");
 
         let err = parse(" ").unwrap_err();
         assert_eq!(err.kind, JsonErrorKind::EmptyInput);

@@ -33,7 +33,8 @@ pub(crate) mod fixture {
 
     /// Shared sample document covering the JQL surface area used by module tests.
     pub fn sample() -> JsonValue {
-        json_load(include_str!("sample.json")).expect("src/jql/sample.json must be valid JSON")
+        json_load(include_str!("sample.json").as_bytes())
+            .expect("src/jql/sample.json must be valid JSON")
     }
 
     pub fn at(path: &str) -> JsonValue {
@@ -86,11 +87,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            jql_execute(
-                &data,
-                ".jobs[]{title,id} | filter(.id > 2) | .[0].title"
-            )
-            .unwrap(),
+            jql_execute(&data, ".jobs[]{title,id} | filter(.id > 2) | .[0].title").unwrap(),
             JsonValue::string("PM".to_string())
         );
     }
@@ -100,13 +97,11 @@ mod tests {
         let data = fixture::sample();
         let query = ".people | filter(.vip == true && .score >= 70) | .[1].name";
         let ast = jql_parse(query).expect("parse");
-        let via_ast = crate::jql::engine::Engine::execute(
-            crate::jql::proxy::Proxy::new(&data),
-            &ast,
-        )
-        .unwrap()
-        .data()
-        .clone();
+        let via_ast =
+            crate::jql::engine::Engine::execute(crate::jql::proxy::Proxy::new(&data), &ast)
+                .unwrap()
+                .data()
+                .clone();
         assert_eq!(via_ast, jql_execute(&data, query).unwrap());
         assert_eq!(via_ast, JsonValue::string("Dave".to_string()));
     }

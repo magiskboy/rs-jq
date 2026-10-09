@@ -6,6 +6,8 @@ edition = "2024"
 [lib]
 name = "rs_jq"
 path = "src/lib.rs"
+# cdylib: Python extension (feature `python`); rlib: Rust CLI / tests
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "jq"
@@ -15,6 +17,8 @@ required-features = ["cli"]
 [features]
 default = []
 cli = ["dep:structopt"]
+python = ["dep:pyo3"]
 
 [dependencies]
+pyo3 = { version = "0.29.3", optional = true }
 structopt = { version = "0.3", optional = true }

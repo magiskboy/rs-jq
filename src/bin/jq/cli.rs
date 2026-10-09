@@ -2,7 +2,7 @@ use std::{fs::File, io::Read, str::FromStr};
 
 use crate::error::AppError;
 use rs_jq::jql::jql_execute;
-use rs_jq::json::{json_load_reader, value::JsonValue};
+use rs_jq::json::{json_load, value::JsonValue};
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -52,15 +52,17 @@ impl Opts {
 fn load_input(input: &str) -> Result<Box<dyn Read>, AppError> {
     match input {
         "" => Ok(Box::new(std::io::stdin())),
-        path => Ok(Box::new(File::open(path).map_err(|source| AppError::Io {
-            path: Some(path.to_string()),
-            source,
+        path => Ok(Box::new(File::open(path).map_err(|source| {
+            AppError::Io {
+                path: Some(path.to_string()),
+                source,
+            }
         })?)),
     }
 }
 
 fn process(reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError> {
-    let json_value = json_load_reader(reader)?;
+    let json_value = json_load(reader)?;
     let result = jql_execute(&json_value, &opts.script)?;
     Ok(result)
 }

@@ -25,11 +25,7 @@ impl Default for JsonDumpOptions {
     }
 }
 
-pub fn json_load(source: &str) -> Result<JsonValue, JsonError> {
-    JsonParser::parse(source)
-}
-
-pub fn json_load_reader(reader: impl Read) -> Result<JsonValue, JsonError> {
+pub fn json_load(reader: impl Read) -> Result<JsonValue, JsonError> {
     JsonParser::parse_reader(reader)
 }
 
