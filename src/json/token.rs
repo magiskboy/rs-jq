@@ -1,4 +1,4 @@
-use crate::Span;
+use crate::{Location, Span};
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,39 +61,73 @@ impl JsonTokenKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Payload carried by string/number tokens so the input buffer can be discarded.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsonLexeme {
+    None,
+    String(String),
+    Number(f32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct JsonToken {
     pub kind: JsonTokenKind,
     pub span: Span,
+    pub location: Location,
+    pub lexeme: JsonLexeme,
+}
+
+impl JsonToken {
+    pub fn simple(kind: JsonTokenKind, span: Span, location: Location) -> Self {
+        Self {
+            kind,
+            span,
+            location,
+            lexeme: JsonLexeme::None,
+        }
+    }
+
+    pub fn string(span: Span, location: Location, value: String) -> Self {
+        Self {
+            kind: JsonTokenKind::String,
+            span,
+            location,
+            lexeme: JsonLexeme::String(value),
+        }
+    }
+
+    pub fn number(span: Span, location: Location, value: f32) -> Self {
+        Self {
+            kind: JsonTokenKind::Number,
+            span,
+            location,
+            lexeme: JsonLexeme::Number(value),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn display(&self) -> JsonTokenDisplay<'_> {
+        JsonTokenDisplay { token: self }
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct JsonTokenDisplay<'a> {
-    pub source: &'a str,
     pub token: &'a JsonToken,
 }
 
 impl<'a> Display for JsonTokenDisplay<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let content = self
-            .source
-            .get(self.token.span.start..self.token.span.end)
-            .unwrap_or("");
+        let content = match &self.token.lexeme {
+            JsonLexeme::None => "",
+            JsonLexeme::String(s) => s.as_str(),
+            JsonLexeme::Number(_) => "<number>",
+        };
         write!(
             f,
             "<kind={}, start={}, end={}, content={}",
             self.token.kind, self.token.span.start, self.token.span.end, content
         )
-    }
-}
-
-impl JsonToken {
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn display<'a>(&'a self, source: &'a str) -> JsonTokenDisplay<'a> {
-        JsonTokenDisplay {
-            source,
-            token: self,
-        }
     }
 }

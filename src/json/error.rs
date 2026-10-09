@@ -101,6 +101,9 @@ pub enum JsonErrorKind {
         key: String,
     },
     InvalidCast,
+    Io {
+        message: String,
+    },
 }
 
 impl JsonErrorKind {
@@ -123,6 +126,7 @@ impl JsonErrorKind {
             | Self::IndexOutOfBounds { .. }
             | Self::InvalidIndex { .. }
             | Self::InvalidCast => "value",
+            Self::Io { .. } => "io",
         }
     }
 
@@ -160,6 +164,7 @@ impl JsonErrorKind {
             }
             Self::InvalidIndex { key } => Cow::Owned(format!("invalid index \"{key}\"")),
             Self::InvalidCast => Cow::Borrowed("invalid cast"),
+            Self::Io { message } => Cow::Owned(message.clone()),
         }
     }
 }
@@ -180,12 +185,26 @@ impl JsonError {
         }
     }
 
+    pub fn at(kind: JsonErrorKind, span: Span, location: Location) -> Self {
+        Self {
+            kind,
+            span: Some(span),
+            location: Some(location),
+        }
+    }
+
     pub fn value(kind: JsonErrorKind) -> Self {
         Self {
             kind,
             span: None,
             location: None,
         }
+    }
+
+    pub fn io(err: impl std::fmt::Display) -> Self {
+        Self::value(JsonErrorKind::Io {
+            message: err.to_string(),
+        })
     }
 }
 

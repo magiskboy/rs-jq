@@ -1,203 +1,270 @@
 use std::collections::HashMap;
+use std::io::Read;
 
 use crate::Span;
 use crate::json::{
     error::{ExpectedSyntax, JsonError, JsonErrorKind},
-    escape::{UnescapeError, unescape_json_string},
     lexer::Lexer,
-    token::{JsonToken, JsonTokenKind},
+    token::{JsonLexeme, JsonToken, JsonTokenKind},
     value::JsonValue,
 };
+use crate::Location;
 
-#[derive(Debug, Clone)]
-pub struct JsonParser<'a> {
-    current_token_idx: usize,
-    source: &'a str,
-    tokens: &'a [JsonToken],
+pub struct JsonParser<R: Read> {
+    lexer: Lexer<R>,
+    current: JsonToken,
+    /// Absolute end of the last consumed non-stop token (for EOF diagnostics).
+    last_end: usize,
 }
 
-impl<'a> JsonParser<'a> {
-    pub fn parse(source: &str) -> Result<JsonValue, JsonError> {
-        let tokens = Lexer::tokenize(source)?;
-        if tokens.is_empty() {
-            return Err(JsonError::new(
-                JsonErrorKind::EmptyInput,
-                Span {
-                    start: 0,
-                    end: source.len(),
-                },
-                source,
-            ));
-        }
+impl<'a> JsonParser<&'a [u8]> {
+    pub fn parse(source: &'a str) -> Result<JsonValue, JsonError> {
+        Self::from_lexer(Lexer::from_str(source))
+    }
+}
 
-        let mut parser = JsonParser::new(&tokens, source);
+impl<R: Read> JsonParser<R> {
+    pub fn parse_reader(reader: R) -> Result<JsonValue, JsonError> {
+        Self::from_lexer(Lexer::new(reader))
+    }
+
+    fn from_lexer(mut lexer: Lexer<R>) -> Result<JsonValue, JsonError> {
+        let first = loop {
+            let pos_before = lexer.position();
+            let token = lexer.next_token()?;
+            match token.kind {
+                JsonTokenKind::Whitespace => {
+                    lexer.discard_consumed();
+                    continue;
+                }
+                JsonTokenKind::Stop => {
+                    return Err(JsonError::at(
+                        JsonErrorKind::EmptyInput,
+                        Span {
+                            start: 0,
+                            end: pos_before,
+                        },
+                        Location { line: 1, column: 1 },
+                    ));
+                }
+                _ => {
+                    lexer.discard_consumed();
+                    break token;
+                }
+            }
+        };
+
+        let mut parser = Self {
+            last_end: first.span.end,
+            current: first,
+            lexer,
+        };
         let value = parser.parse_value()?;
         parser.expect_eof()?;
-
         Ok(value)
     }
 
-    pub fn new(tokens: &'a [JsonToken], source: &'a str) -> Self {
-        Self {
-            current_token_idx: 0,
-            source,
-            tokens,
+    fn error(&self, kind: JsonErrorKind, span: Span, location: Location) -> JsonError {
+        JsonError::at(kind, span, location)
+    }
+
+    fn bump(&mut self) -> Result<(), JsonError> {
+        if self.current.kind != JsonTokenKind::Stop {
+            self.last_end = self.current.span.end;
         }
+        self.current = self.lexer.next_significant()?;
+        Ok(())
     }
 
-    fn error(&self, kind: JsonErrorKind, span: Span) -> JsonError {
-        JsonError::new(kind, span, self.source)
-    }
-
-    fn expect_eof(&self) -> Result<(), JsonError> {
-        let next = self.current_token_idx + 1;
-        if next < self.tokens.len() {
+    fn expect_eof(&mut self) -> Result<(), JsonError> {
+        if self.current.kind != JsonTokenKind::Stop {
             return Err(self.error(
                 JsonErrorKind::TrailingInput,
-                self.tokens[next].span,
+                self.current.span,
+                self.current.location,
             ));
         }
         Ok(())
     }
 
+    fn eof_error(&self, expected: ExpectedSyntax) -> JsonError {
+        self.error(
+            JsonErrorKind::UnexpectedEof { expected },
+            Span {
+                start: self.last_end,
+                end: self.last_end,
+            },
+            self.lexer.location(),
+        )
+    }
+
+    fn expect(&mut self, kind: JsonTokenKind) -> Result<JsonToken, JsonError> {
+        if self.current.kind != kind {
+            if self.current.kind == JsonTokenKind::Stop {
+                return Err(self.eof_error(ExpectedSyntax::Token(kind)));
+            }
+            return Err(self.error(
+                JsonErrorKind::UnexpectedToken {
+                    expected: ExpectedSyntax::Token(kind),
+                    found: self.current.kind.clone(),
+                },
+                self.current.span,
+                self.current.location,
+            ));
+        }
+        let token = self.current.clone();
+        self.bump()?;
+        Ok(token)
+    }
+
     fn parse_object(&mut self) -> Result<JsonValue, JsonError> {
-        self.parse_token(JsonTokenKind::LBrace)?;
-        self.next_token(ExpectedSyntax::Token(JsonTokenKind::RBrace))?;
-        let members = self.parse_members()?;
-        self.next_token(ExpectedSyntax::Token(JsonTokenKind::RBrace))?;
-        self.parse_token(JsonTokenKind::RBrace)?;
+        self.expect(JsonTokenKind::LBrace)?;
+        if self.current.kind == JsonTokenKind::RBrace {
+            self.bump()?;
+            return Ok(JsonValue::object(HashMap::new()));
+        }
+
+        let mut members: Vec<(String, JsonValue)> = vec![];
+        loop {
+            if self.current.kind != JsonTokenKind::String {
+                if self.current.kind == JsonTokenKind::Stop {
+                    return Err(self.eof_error(ExpectedSyntax::Token(JsonTokenKind::RBrace)));
+                }
+                return Err(self.unexpected(ExpectedSyntax::Token(JsonTokenKind::String)));
+            }
+
+            members.push(self.parse_pair()?);
+
+            match self.current.kind {
+                JsonTokenKind::Comma => {
+                    self.bump()?;
+                    if self.current.kind == JsonTokenKind::RBrace {
+                        return Err(self.unexpected(ExpectedSyntax::Token(JsonTokenKind::String)));
+                    }
+                    continue;
+                }
+                JsonTokenKind::RBrace => {
+                    self.bump()?;
+                    break;
+                }
+                JsonTokenKind::Stop => {
+                    return Err(self.eof_error(ExpectedSyntax::Token(JsonTokenKind::RBrace)));
+                }
+                _ => {
+                    return Err(self.unexpected(ExpectedSyntax::Token(JsonTokenKind::RBrace)));
+                }
+            }
+        }
+
         Ok(JsonValue::object(HashMap::<String, JsonValue>::from_iter(
             members.into_iter(),
         )))
     }
 
-    fn parse_members(&mut self) -> Result<Vec<(String, JsonValue)>, JsonError> {
-        let mut members: Vec<(String, JsonValue)> = vec![];
-        loop {
-            if self.get_token().kind != JsonTokenKind::String {
-                if !members.is_empty() {
-                    return Err(self.unexpected(ExpectedSyntax::Token(JsonTokenKind::String)));
-                }
-                self.back_token();
-                break;
-            }
-
-            members.push(self.parse_pair()?);
-            self.next_token(ExpectedSyntax::Token(JsonTokenKind::RBrace))?;
-            if self.parse_token(JsonTokenKind::Comma).is_err() {
-                break;
-            }
-            self.next_token(ExpectedSyntax::Token(JsonTokenKind::String))?;
-        }
-        Ok(members)
-    }
-
     fn parse_pair(&mut self) -> Result<(String, JsonValue), JsonError> {
-        let key_token = self.parse_token(JsonTokenKind::String)?;
-        let key = self.get_string_content(&key_token)?;
-        self.next_token(ExpectedSyntax::Token(JsonTokenKind::Colon))?;
-        self.parse_token(JsonTokenKind::Colon)?;
-        self.next_token(ExpectedSyntax::Value)?;
+        let key_token = self.expect(JsonTokenKind::String)?;
+        let key = match key_token.lexeme {
+            JsonLexeme::String(s) => s,
+            _ => {
+                return Err(self.error(
+                    JsonErrorKind::InvalidEscape,
+                    key_token.span,
+                    key_token.location,
+                ));
+            }
+        };
+        self.expect(JsonTokenKind::Colon)?;
         let value = self.parse_value()?;
-        Ok((key.to_string(), value))
+        Ok((key, value))
     }
 
     fn parse_array(&mut self) -> Result<JsonValue, JsonError> {
-        self.parse_token(JsonTokenKind::LBracket)?;
-        self.next_token(ExpectedSyntax::Token(JsonTokenKind::RBracket))?;
-        let elements = self.parse_elements()?;
-        self.next_token(ExpectedSyntax::Token(JsonTokenKind::RBracket))?;
-        self.parse_token(JsonTokenKind::RBracket)?;
-        Ok(JsonValue::array(elements))
-    }
+        self.expect(JsonTokenKind::LBracket)?;
+        if self.current.kind == JsonTokenKind::RBracket {
+            self.bump()?;
+            return Ok(JsonValue::array(vec![]));
+        }
 
-    fn parse_elements(&mut self) -> Result<Vec<JsonValue>, JsonError> {
         let mut items: Vec<JsonValue> = vec![];
         loop {
-            if !Self::starts_value(&self.get_token().kind) {
-                if !items.is_empty() {
-                    return Err(self.unexpected(ExpectedSyntax::Value));
+            if !Self::starts_value(&self.current.kind) {
+                if self.current.kind == JsonTokenKind::Stop {
+                    return Err(self.eof_error(ExpectedSyntax::Token(JsonTokenKind::RBracket)));
                 }
-                self.back_token();
-                break;
+                return Err(self.unexpected(ExpectedSyntax::Value));
             }
 
             items.push(self.parse_value()?);
-            self.next_token(ExpectedSyntax::Token(JsonTokenKind::RBracket))?;
-            if self.parse_token(JsonTokenKind::Comma).is_err() {
-                break;
+
+            match self.current.kind {
+                JsonTokenKind::Comma => {
+                    self.bump()?;
+                    if self.current.kind == JsonTokenKind::RBracket {
+                        return Err(self.unexpected(ExpectedSyntax::Value));
+                    }
+                    continue;
+                }
+                JsonTokenKind::RBracket => {
+                    self.bump()?;
+                    break;
+                }
+                JsonTokenKind::Stop => {
+                    return Err(self.eof_error(ExpectedSyntax::Token(JsonTokenKind::RBracket)));
+                }
+                _ => {
+                    return Err(self.unexpected(ExpectedSyntax::Token(JsonTokenKind::RBracket)));
+                }
             }
-            self.next_token(ExpectedSyntax::Value)?;
         }
-        Ok(items)
+
+        Ok(JsonValue::array(items))
     }
 
     fn parse_value(&mut self) -> Result<JsonValue, JsonError> {
-        let first = self.get_token();
-
-        match first.kind {
-            JsonTokenKind::Null => Ok(JsonValue::null()),
-            JsonTokenKind::True => Ok(JsonValue::boolean(true)),
-            JsonTokenKind::False => Ok(JsonValue::boolean(false)),
-            JsonTokenKind::String => Ok(JsonValue::string(self.get_string_content(first)?)),
-            JsonTokenKind::Number => Ok(JsonValue::number(self.get_number_content(first)?)),
+        match self.current.kind {
+            JsonTokenKind::Null => {
+                self.bump()?;
+                Ok(JsonValue::null())
+            }
+            JsonTokenKind::True => {
+                self.bump()?;
+                Ok(JsonValue::boolean(true))
+            }
+            JsonTokenKind::False => {
+                self.bump()?;
+                Ok(JsonValue::boolean(false))
+            }
+            JsonTokenKind::String => {
+                let token = self.current.clone();
+                self.bump()?;
+                match token.lexeme {
+                    JsonLexeme::String(s) => Ok(JsonValue::string(s)),
+                    _ => Err(self.error(JsonErrorKind::InvalidEscape, token.span, token.location)),
+                }
+            }
+            JsonTokenKind::Number => {
+                let token = self.current.clone();
+                self.bump()?;
+                match token.lexeme {
+                    JsonLexeme::Number(n) => Ok(JsonValue::number(n)),
+                    _ => Err(self.error(JsonErrorKind::InvalidNumber, token.span, token.location)),
+                }
+            }
             JsonTokenKind::LBracket => self.parse_array(),
             JsonTokenKind::LBrace => self.parse_object(),
+            JsonTokenKind::Stop => Err(self.eof_error(ExpectedSyntax::Value)),
             _ => Err(self.unexpected(ExpectedSyntax::Value)),
         }
     }
 
-    fn parse_token(&mut self, kind: JsonTokenKind) -> Result<JsonToken, JsonError> {
-        let token = self.get_token().clone();
-        if token.kind != kind {
-            self.back_token();
-            return Err(self.error(
-                JsonErrorKind::UnexpectedToken {
-                    expected: ExpectedSyntax::Token(kind),
-                    found: token.kind,
-                },
-                token.span,
-            ));
-        }
-
-        Ok(token)
-    }
-
-    fn next_token(&mut self, expected: ExpectedSyntax) -> Result<usize, JsonError> {
-        if self.current_token_idx + 1 >= self.tokens.len() {
-            let end = self
-                .tokens
-                .last()
-                .map(|token| token.span.end)
-                .unwrap_or(self.source.len());
-            return Err(self.error(
-                JsonErrorKind::UnexpectedEof { expected },
-                Span { start: end, end },
-            ));
-        }
-
-        self.current_token_idx += 1;
-        Ok(self.current_token_idx)
-    }
-
-    fn back_token(&mut self) {
-        debug_assert!(
-            self.current_token_idx > 0,
-            "cannot move before the first token"
-        );
-        if self.current_token_idx > 0 {
-            self.current_token_idx -= 1;
-        }
-    }
-
     fn unexpected(&self, expected: ExpectedSyntax) -> JsonError {
-        let token = self.get_token();
         self.error(
             JsonErrorKind::UnexpectedToken {
                 expected,
-                found: token.kind.clone(),
+                found: self.current.kind.clone(),
             },
-            token.span,
+            self.current.span,
+            self.current.location,
         )
     }
 
@@ -212,40 +279,6 @@ impl<'a> JsonParser<'a> {
                 | JsonTokenKind::LBracket
                 | JsonTokenKind::LBrace
         )
-    }
-
-    fn get_token(&self) -> &'a JsonToken {
-        self.tokens.get(self.current_token_idx).unwrap()
-    }
-
-    fn get_string_content(&self, token: &JsonToken) -> Result<String, JsonError> {
-        debug_assert_eq!(token.kind, JsonTokenKind::String);
-        let content = self
-            .source
-            .get(token.span.start + 1..token.span.end - 1)
-            .expect("string token span includes quotes");
-        unescape_json_string(content)
-            .map_err(|err| self.error(Self::unescape_kind(err), token.span))
-    }
-
-    fn unescape_kind(err: UnescapeError) -> JsonErrorKind {
-        match err {
-            UnescapeError::InvalidEscape(_) => JsonErrorKind::InvalidEscape,
-            UnescapeError::InvalidUnicodeEscape => JsonErrorKind::InvalidUnicodeEscape,
-            UnescapeError::InvalidSurrogatePair => JsonErrorKind::InvalidSurrogatePair,
-            UnescapeError::UnescapedControlCharacter => JsonErrorKind::UnescapedControl,
-        }
-    }
-
-    fn get_number_content(&self, token: &JsonToken) -> Result<f32, JsonError> {
-        debug_assert_eq!(token.kind, JsonTokenKind::Number);
-        let content = self
-            .source
-            .get(token.span.start..token.span.end)
-            .expect("number token span is inside the source");
-        content
-            .parse::<f32>()
-            .map_err(|_| self.error(JsonErrorKind::InvalidNumber, token.span))
     }
 }
 

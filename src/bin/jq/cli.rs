@@ -2,7 +2,7 @@ use std::{fs::File, io::Read, str::FromStr};
 
 use crate::error::AppError;
 use rs_jq::jql::jql_execute;
-use rs_jq::json::{json_load, value::JsonValue};
+use rs_jq::json::{json_load_reader, value::JsonValue};
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -59,18 +59,8 @@ fn load_input(input: &str) -> Result<Box<dyn Read>, AppError> {
     }
 }
 
-fn process(mut reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError> {
-    let mut source = String::new();
-    reader.read_to_string(&mut source).map_err(|err| AppError::Io {
-        path: if opts.input.is_empty() {
-            None
-        } else {
-            Some(opts.input.clone())
-        },
-        source: err,
-    })?;
-
-    let json_value = json_load(&source)?;
+fn process(reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError> {
+    let json_value = json_load_reader(reader)?;
     let result = jql_execute(&json_value, &opts.script)?;
     Ok(result)
 }
