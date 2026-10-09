@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::Span;
 use crate::json::{
     error::{ExpectedSyntax, JsonError, JsonErrorKind},
     escape::{UnescapeError, unescape_json_string},
@@ -7,7 +8,6 @@ use crate::json::{
     token::{JsonToken, JsonTokenKind},
     value::JsonValue,
 };
-use crate::source::Span;
 
 #[derive(Debug, Clone)]
 pub struct JsonParser<'a> {
@@ -246,13 +246,13 @@ impl<'a> JsonParser<'a> {
 
 #[cfg(test)]
 mod test {
+    use crate::Span;
     use crate::json::{
         JsonValue,
         error::{ExpectedSyntax, JsonError, JsonErrorKind},
         parser::JsonParser,
         token::JsonTokenKind,
     };
-    use crate::source::Span;
     use std::collections::HashMap;
 
     fn parse(source: &str) -> Result<JsonValue, JsonError> {

@@ -1,4 +1,4 @@
-use crate::source::Span;
+use crate::Span;
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,4 +1,4 @@
-use crate::source::Span;
+use crate::Span;
 
 #[derive(Debug, Clone, Eq, PartialEq, Copy, PartialOrd)]
 pub enum JqlTokenKind {

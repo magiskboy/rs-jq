@@ -3,7 +3,7 @@ use crate::json::{
     escape::{ESCAPE_TOKENS, MUST_BE_ESCAPED},
     token::{JsonToken, JsonTokenKind},
 };
-use crate::source::{Source, Span};
+use crate::{Source, Span};
 
 #[derive(Debug, Clone)]
 pub struct Lexer<'a> {

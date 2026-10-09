@@ -3,8 +3,8 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
+use crate::Span;
 use crate::jql::token::JqlTokenKind;
-use crate::source::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedSyntax {
@@ -105,7 +105,7 @@ impl Display for JqlError {
 mod tests {
     use super::{ExpectedSyntax, JqlError, JqlErrorKind};
     use crate::jql::token::JqlTokenKind;
-    use crate::source::Span;
+    use crate::Span;
 
     fn err(kind: JqlErrorKind, start: usize, end: usize) -> JqlError {
         JqlError::new(kind, Span { start, end })

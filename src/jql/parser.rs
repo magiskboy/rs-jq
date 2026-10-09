@@ -180,7 +180,7 @@ mod test {
         parser::JqlParser,
         token::{JqlToken, JqlTokenKind},
     };
-    use crate::source::Span;
+    use crate::Span;
 
     fn tokens(source: &str, parts: &[(JqlTokenKind, &str)]) -> Vec<JqlToken> {
         let mut cursor = 0;

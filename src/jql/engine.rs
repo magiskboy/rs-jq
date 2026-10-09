@@ -10,7 +10,7 @@ use crate::{
         error::JsonError,
         value::{JsonLogic, JsonOrd, JsonValue},
     },
-    source::Span,
+    Span,
 };
 
 #[derive(Clone)]

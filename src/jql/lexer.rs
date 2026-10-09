@@ -3,7 +3,7 @@ use crate::{
         error::{JqlError, JqlErrorKind},
         token::{JqlToken, JqlTokenKind},
     },
-    source::{Source, Span},
+    {Source, Span},
 };
 
 #[derive(Debug, Clone)]
@@ -312,6 +312,7 @@ impl<'a> JqlLexer<'a> {
 #[cfg(test)]
 mod test {
     use super::JqlLexer;
+    use crate::Span;
     use crate::jql::error::{JqlError, JqlErrorKind};
     use crate::jql::token::{JqlToken, JqlTokenKind};
 
@@ -669,7 +670,7 @@ mod test {
             vec![JqlTokenKind::String, JqlTokenKind::Identifier]
         );
         assert_eq!(lexemes(source, &tokens), vec!["\"hi\\\"", "there"]);
-        assert_eq!(tokens[0].span, crate::source::Span { start: 0, end: 5 });
+        assert_eq!(tokens[0].span, Span { start: 0, end: 5 });
 
         for source in ["\"\\\"\"", "\"a\\\"b\"", "\"abc\\"] {
             assert_invalid(source);
@@ -777,12 +778,12 @@ mod test {
                 ".money", ">", "10", "||", ".gold", ">=", "1", ")", ")",
             ]
         );
-        assert_eq!(tokens[0].span, crate::source::Span { start: 0, end: 4 });
-        assert_eq!(tokens[1].span, crate::source::Span { start: 5, end: 6 });
-        assert_eq!(tokens[6].span, crate::source::Span { start: 20, end: 22 });
+        assert_eq!(tokens[0].span, Span { start: 0, end: 4 });
+        assert_eq!(tokens[1].span, Span { start: 5, end: 6 });
+        assert_eq!(tokens[6].span, Span { start: 20, end: 22 });
         assert_eq!(
             tokens.last().unwrap().span,
-            crate::source::Span { start: 66, end: 67 }
+            Span { start: 66, end: 67 }
         );
     }
 }
