@@ -2,9 +2,8 @@ use std::{borrow::Cow, str::FromStr};
 
 use crate::Structured;
 use crate::jql::error::{JqlError, JqlErrorKind};
-use crate::jql::reference::ArrayExtra;
-use crate::jql::reference::ObjectExtra;
-use crate::jql::reference::Reference;
+use crate::jql::reference::{Access, ArrayIndex};
+use crate::jql::reference::{PropertySelection, Reference};
 use crate::json::value::JsonValue;
 
 #[derive(Debug, Clone)]
@@ -98,31 +97,44 @@ impl<'a> Proxy<'a> {
         let jref = Reference::from_str(ref_str)?;
         let mut current = self.data.as_ref().clone();
 
-        for prop in jref.properties {
-            // Empty name is the root ref: operate on the current value as-is.
-            let value = if prop.name.is_empty() {
-                current.clone()
-            } else {
-                current
-                    .get(&prop.name)
-                    .map_err(|_| Self::execution_error())?
-                    .clone()
+        for access in jref.access {
+            let value = match access {
+                Access::PropertyAccess {
+                    property,
+                    properties,
+                } => {
+                    // Empty name is the root ref: operate on the current value as-is.
+                    let new = if property.is_empty() {
+                        &current
+                    } else {
+                        current
+                            .get(&property)
+                            .map_err(|_| Self::execution_error())?
+                    };
+                    match properties {
+                        PropertySelection::Properties(keys) => Self::select_keys(new, &keys)?,
+                        _ => new.clone(),
+                    }
+                }
+                Access::IndexAccess { index, properties } => {
+                    let new = match index {
+                        ArrayIndex::Index(index) => current
+                            .get(&index.to_string())
+                            .map_err(|_| Self::execution_error())?
+                            .clone(),
+                        ArrayIndex::Range { start, end } => Self::slice(&current, start, end)?,
+                        ArrayIndex::MultipleIndex(indices) => Self::select(&current, indices)?,
+                        _ => current.clone(),
+                    };
+
+                    match properties {
+                        PropertySelection::Properties(keys) => Self::select_keys(&new, &keys)?,
+                        _ => new.clone(),
+                    }
+                }
             };
 
-            current = match prop.array_extra {
-                ArrayExtra::Index(idx) => value
-                    .get(&idx.to_string())
-                    .map_err(|_| Self::execution_error())?
-                    .clone(),
-                ArrayExtra::Range { start, end } => Self::slice(&value, start, end)?,
-                ArrayExtra::MultipleIndex(indices) => Self::select(&value, indices)?,
-                _ => value,
-            };
-
-            current = match prop.object_extra {
-                ObjectExtra::MultipleProperties(names) => Self::select_keys(&current, &names)?,
-                _ => current,
-            };
+            current = value;
         }
 
         Ok(Proxy {

@@ -290,11 +290,16 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_brackets_without_dot_are_rejected() {
+    fn consecutive_brackets_without_dot_are_accepted() {
         let data = fixture();
-        assert_err(&data, ".matrix[0][1]");
-        assert_err(&data, ".nested[1][0]");
-        assert_err(&data, ".[0][1]");
+        assert_ok(&data, ".matrix[0][1]", JsonValue::number(2.0));
+        assert_ok(&data, ".nested[1][0]", JsonValue::number(2.0));
+
+        let root = JsonValue::array(vec![
+            JsonValue::array(vec![JsonValue::number(10.0), JsonValue::number(20.0)]),
+            JsonValue::array(vec![JsonValue::number(30.0), JsonValue::number(40.0)]),
+        ]);
+        assert_ok(&root, ".[0][1]", JsonValue::number(20.0));
     }
 
     #[test]

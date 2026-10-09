@@ -3,7 +3,13 @@ use std::{fmt::Debug, str::FromStr};
 use crate::jql::error::{JqlError, JqlErrorKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArrayExtra {
+pub enum PropertySelection {
+    Properties(Vec<String>),
+    All,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArrayIndex {
     Range { start: usize, end: usize },
     Index(usize),
     MultipleIndex(Vec<usize>),
@@ -11,128 +17,137 @@ pub enum ArrayExtra {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ObjectExtra {
-    MultipleProperties(Vec<String>),
-    All,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Property {
-    pub name: String,
-    pub array_extra: ArrayExtra,
-    pub object_extra: ObjectExtra,
-}
-
-impl std::default::Default for Property {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            array_extra: ArrayExtra::All,
-            object_extra: ObjectExtra::All,
-        }
-    }
+pub enum Access {
+    IndexAccess {
+        index: ArrayIndex,
+        properties: PropertySelection,
+    },
+    PropertyAccess {
+        property: String,
+        properties: PropertySelection,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reference {
-    pub properties: Vec<Property>,
+    pub access: Vec<Access>,
 }
 
 #[derive(Debug, Clone)]
 enum ParseReferenceState {
     StartProperty,
     InProperty,
-    StartExtraArray,
-    InIndex,
-    InSlice,
-    InSliceColon,
+    StartArrayIndex,
+    InArrayIndex,
+    InArraySlice,
+    InArraySliceColon,
     InMultipleIndex,
     InMultipleIndexComma,
-    CloseExtraArray,
-    StartExtraObject,
-    InExtraObjectKey,
-    InExtraObjectComma,
-    CloseExtraObject,
+    CloseArrayIndex,
+    StartPropertySelection,
+    InPropertySelection,
+    InPropertyComma,
+    ClosePropertySelection,
     InvalidCharacter,
 }
 
 impl Reference {
-    fn invalid_access() -> JqlError {
-        JqlError::from_kind(JqlErrorKind::InvalidAccess)
-    }
-
-    fn parse_usize(raw: &str) -> Result<usize, JqlError> {
-        raw.parse::<usize>().map_err(|_| Self::invalid_access())
-    }
-
     fn accept_state(
         state: &ParseReferenceState,
         start: usize,
         end: usize,
         source: &str,
-        prop: &mut Property,
-    ) -> Result<(), JqlError> {
+        last_access: &Access,
+    ) -> Result<Access, JqlError> {
         match state {
             ParseReferenceState::InProperty => {
-                prop.name = source
+                let property = source
                     .get(start..end)
                     .ok_or_else(Self::invalid_access)?
                     .to_string();
-                Ok(())
+                Ok(Access::PropertyAccess {
+                    property,
+                    properties: PropertySelection::All,
+                })
             }
-            ParseReferenceState::CloseExtraObject => {
-                let s = source.get(start..end).ok_or_else(Self::invalid_access)?;
+
+            ParseReferenceState::CloseArrayIndex => {
+                let s = source
+                    .get(start..end - 1)
+                    .ok_or_else(Self::invalid_access)?;
+
+                if s.is_empty() {
+                    return Ok(Access::IndexAccess {
+                        index: ArrayIndex::All,
+                        properties: PropertySelection::All,
+                    });
+                }
+
+                if let Ok(index) = Self::parse_usize(s) {
+                    return Ok(Access::IndexAccess {
+                        index: ArrayIndex::Index(index),
+                        properties: PropertySelection::All,
+                    });
+                }
+
+                let parts: Vec<&str> = s.split(':').collect();
+                if parts.len() == 2 {
+                    let start = Self::parse_usize(&parts[0])?;
+                    let end = Self::parse_usize(&parts[1])?;
+                    return Ok(Access::IndexAccess {
+                        index: ArrayIndex::Range { start, end },
+                        properties: PropertySelection::All,
+                    });
+                }
+
+                let indices = s
+                    .split(',')
+                    .map(Self::parse_usize)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Access::IndexAccess {
+                    index: ArrayIndex::MultipleIndex(indices),
+                    properties: PropertySelection::All,
+                })
+            }
+
+            ParseReferenceState::ClosePropertySelection => {
+                let s = source
+                    .get(start..end - 1)
+                    .ok_or_else(Self::invalid_access)?;
                 if let Some(lbrace) = s.find('{') {
                     let keys: Vec<String> = s
-                        .get(lbrace + 1..end - 2)
+                        .get(lbrace + 1..)
                         .ok_or_else(Self::invalid_access)?
                         .split(",")
                         .map(|x| x.to_string())
                         .filter(|x| !x.is_empty())
                         .collect();
-                    if keys.is_empty() {
-                        prop.object_extra = ObjectExtra::All;
+
+                    let selected_props = if keys.is_empty() {
+                        PropertySelection::All
                     } else {
-                        prop.object_extra = ObjectExtra::MultipleProperties(keys);
-                    }
-                }
-                Ok(())
-            }
-            ParseReferenceState::CloseExtraArray => Ok(()),
-            ParseReferenceState::InIndex => {
-                let s = source.get(start..end).ok_or_else(Self::invalid_access)?;
-                if let Some(x) = s.find('[') {
-                    let index = Self::parse_usize(&s[x + 1..])?;
-                    prop.array_extra = ArrayExtra::Index(index);
-                }
-                Ok(())
-            }
-            ParseReferenceState::InSlice => {
-                let s = source.get(start..end).ok_or_else(Self::invalid_access)?;
-                if let Some(index) = s.find('[') {
-                    let parts: Vec<&str> = s[index + 1..].split(':').collect();
-                    if parts.len() != 2 {
-                        return Err(Self::invalid_access());
-                    }
-                    prop.array_extra = ArrayExtra::Range {
-                        start: Self::parse_usize(parts[0])?,
-                        end: Self::parse_usize(parts[1])?,
+                        PropertySelection::Properties(keys)
                     };
+                    return Ok(match last_access {
+                        Access::IndexAccess {
+                            index,
+                            properties: _,
+                        } => Access::IndexAccess {
+                            index: index.clone(),
+                            properties: selected_props,
+                        },
+                        Access::PropertyAccess {
+                            property,
+                            properties: _,
+                        } => Access::PropertyAccess {
+                            property: property.clone(),
+                            properties: selected_props,
+                        },
+                    });
                 }
-                Ok(())
+                Err(Self::invalid_access())
             }
-            ParseReferenceState::InMultipleIndex => {
-                let s = source.get(start..end).ok_or_else(Self::invalid_access)?;
-                if let Some(index) = s.find('[') {
-                    let indices = s[index + 1..]
-                        .split(',')
-                        .map(Self::parse_usize)
-                        .collect::<Result<Vec<_>, _>>()?;
-                    prop.array_extra = ArrayExtra::MultipleIndex(indices);
-                }
-                Ok(())
-            }
-            _ => Ok(()),
+            _ => Err(Self::invalid_access()),
         }
     }
 
@@ -140,28 +155,28 @@ impl Reference {
         let next_state = match state {
             ParseReferenceState::StartProperty => match c {
                 'a'..='z' | 'A'..='Z' => ParseReferenceState::InProperty,
-                '{' => ParseReferenceState::StartExtraObject,
-                '[' => ParseReferenceState::StartExtraArray,
+                '{' => ParseReferenceState::StartPropertySelection,
+                '[' => ParseReferenceState::StartArrayIndex,
                 '.' => ParseReferenceState::StartProperty,
                 _ => ParseReferenceState::InvalidCharacter,
             },
             ParseReferenceState::InProperty => match c {
                 'a'..='z' | 'A'..='Z' | '0'..='9' => ParseReferenceState::InProperty,
                 '.' => ParseReferenceState::StartProperty,
-                '[' => ParseReferenceState::StartExtraArray,
-                '{' => ParseReferenceState::StartExtraObject,
+                '[' => ParseReferenceState::StartArrayIndex,
+                '{' => ParseReferenceState::StartPropertySelection,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::StartExtraArray => match c {
-                '0'..='9' => ParseReferenceState::InIndex,
-                ']' => ParseReferenceState::CloseExtraArray,
+            ParseReferenceState::StartArrayIndex => match c {
+                '0'..='9' => ParseReferenceState::InArrayIndex,
+                ']' => ParseReferenceState::CloseArrayIndex,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::InIndex => match c {
-                '0'..='9' => ParseReferenceState::InIndex,
-                ']' => ParseReferenceState::CloseExtraArray,
+            ParseReferenceState::InArrayIndex => match c {
+                '0'..='9' => ParseReferenceState::InArrayIndex,
+                ']' => ParseReferenceState::CloseArrayIndex,
                 ',' => ParseReferenceState::InMultipleIndexComma,
-                ':' => ParseReferenceState::InSliceColon,
+                ':' => ParseReferenceState::InArraySliceColon,
                 _ => ParseReferenceState::InvalidCharacter,
             },
             ParseReferenceState::InMultipleIndexComma => match c {
@@ -171,41 +186,42 @@ impl Reference {
             ParseReferenceState::InMultipleIndex => match c {
                 '0'..='9' => ParseReferenceState::InMultipleIndex,
                 ',' => ParseReferenceState::InMultipleIndexComma,
-                ']' => ParseReferenceState::CloseExtraArray,
+                ']' => ParseReferenceState::CloseArrayIndex,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::InSliceColon => match c {
-                '0'..='9' => ParseReferenceState::InSlice,
+            ParseReferenceState::InArraySliceColon => match c {
+                '0'..='9' => ParseReferenceState::InArraySlice,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::InSlice => match c {
-                '0'..='9' => ParseReferenceState::InSlice,
-                ']' => ParseReferenceState::CloseExtraArray,
+            ParseReferenceState::InArraySlice => match c {
+                '0'..='9' => ParseReferenceState::InArraySlice,
+                ']' => ParseReferenceState::CloseArrayIndex,
                 _ => ParseReferenceState::InvalidCharacter,
             },
 
-            ParseReferenceState::StartExtraObject => match c {
-                'a'..='z' | 'A'..='Z' => ParseReferenceState::InExtraObjectKey,
-                ',' => ParseReferenceState::InExtraObjectComma,
-                '}' => ParseReferenceState::CloseExtraObject,
+            ParseReferenceState::StartPropertySelection => match c {
+                'a'..='z' | 'A'..='Z' => ParseReferenceState::InPropertySelection,
+                ',' => ParseReferenceState::InPropertyComma,
+                '}' => ParseReferenceState::ClosePropertySelection,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::InExtraObjectKey => match c {
-                'a'..='z' | 'A'..='Z' => ParseReferenceState::InExtraObjectKey,
-                ',' => ParseReferenceState::InExtraObjectComma,
-                '}' => ParseReferenceState::CloseExtraObject,
+            ParseReferenceState::InPropertySelection => match c {
+                'a'..='z' | 'A'..='Z' => ParseReferenceState::InPropertySelection,
+                ',' => ParseReferenceState::InPropertyComma,
+                '}' => ParseReferenceState::ClosePropertySelection,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::InExtraObjectComma => match c {
-                'a'..='z' | 'A'..='Z' => ParseReferenceState::InExtraObjectKey,
+            ParseReferenceState::InPropertyComma => match c {
+                'a'..='z' | 'A'..='Z' => ParseReferenceState::InPropertySelection,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::CloseExtraArray => match c {
+            ParseReferenceState::CloseArrayIndex => match c {
                 '.' => ParseReferenceState::StartProperty,
-                '{' => ParseReferenceState::StartExtraObject,
+                '[' => ParseReferenceState::StartArrayIndex,
+                '{' => ParseReferenceState::StartPropertySelection,
                 _ => ParseReferenceState::InvalidCharacter,
             },
-            ParseReferenceState::CloseExtraObject => match c {
+            ParseReferenceState::ClosePropertySelection => match c {
                 '.' => ParseReferenceState::StartProperty,
                 _ => ParseReferenceState::InvalidCharacter,
             },
@@ -218,30 +234,20 @@ impl Reference {
             o => Some(o),
         }
     }
+
+    fn invalid_access() -> JqlError {
+        JqlError::from_kind(JqlErrorKind::InvalidAccess)
+    }
+
+    fn parse_usize(raw: &str) -> Result<usize, JqlError> {
+        raw.parse::<usize>().map_err(|_| Self::invalid_access())
+    }
 }
 
 impl FromStr for Reference {
     type Err = JqlError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        /*
-         * Support
-         * ---------------------------
-         * .          -> root (identity); always prefixed as Property::default()
-         * .jobs      -> List<Job>
-         * .jobs[1]   -> Job
-         * .jobs[]    -> Iterator<Job>
-         * .jobs[1,2] -> Iterator<Job>
-         * .jobs[1:3] -> Iterator<Job>
-         *
-         * .person{}           -> Iterator<Pair>
-         * .person{name,age}   -> Iterator<Pair if Pair[0] in [name, age]>
-         *
-         * .jobs[]{}  -> Iterator<Job>
-         * .jobs[]{title,description} -> Iterator<Pair if Pair[0] in [title, description]>
-         *
-         */
-
         if !s.starts_with('.') {
             return Err(Self::invalid_access());
         }
@@ -249,14 +255,20 @@ impl FromStr for Reference {
         // Root reference: identity over the current document.
         if s == "." {
             return Ok(Self {
-                properties: vec![Property::default()],
+                access: vec![Access::PropertyAccess {
+                    property: String::new(),
+                    properties: PropertySelection::All,
+                }],
             });
         }
 
-        let mut props: Vec<Property> = vec![Property::default()];
+        let mut access: Vec<Access> = vec![Access::PropertyAccess {
+            property: String::new(),
+            properties: PropertySelection::All,
+        }];
         let mut idx: usize = 1;
         let mut state = ParseReferenceState::StartProperty;
-        let mut prop = Property::default();
+        let mut prop = access[0].clone();
         let mut start: usize = 1;
 
         while idx < s.len() {
@@ -266,27 +278,57 @@ impl FromStr for Reference {
             };
 
             state = new_state;
-            Self::accept_state(&state, start, idx + ch.len_utf8(), s, &mut prop)?;
+            if let Ok(v) = Self::accept_state(&state, start, idx + ch.len_utf8(), s, &prop) {
+                prop = v;
+            }
 
-            if matches!(state, ParseReferenceState::StartProperty) {
-                props.push(prop);
+            if matches!(
+                state,
+                ParseReferenceState::StartProperty | ParseReferenceState::StartArrayIndex
+            ) {
+                access.push(prop);
                 start = idx + ch.len_utf8();
-                prop = Property::default();
+
+                prop = match state {
+                    ParseReferenceState::StartProperty => Access::PropertyAccess {
+                        property: String::new(),
+                        properties: PropertySelection::All,
+                    },
+                    ParseReferenceState::StartArrayIndex => Access::IndexAccess {
+                        index: ArrayIndex::All,
+                        properties: PropertySelection::All,
+                    },
+                    _ => unreachable!(),
+                }
             }
 
             idx += ch.len_utf8();
         }
 
-        props.push(prop);
+        access.push(prop);
 
-        if props.len() > 1 && props[0].name == props[1].name && props[0].name == String::new() {
-            props.remove(0);
+        match (access.get(0), access.get(1)) {
+            (
+                Some(Access::PropertyAccess {
+                    property: p1,
+                    properties: _,
+                }),
+                Some(Access::PropertyAccess {
+                    property: p2,
+                    properties: _,
+                }),
+            ) => {
+                if p1 == p2 && p1.is_empty() {
+                    access.remove(0);
+                }
+            }
+            _ => unreachable!(),
         }
 
         match state {
             ParseReferenceState::InProperty
-            | ParseReferenceState::CloseExtraArray
-            | ParseReferenceState::CloseExtraObject => Ok(Self { properties: props }),
+            | ParseReferenceState::CloseArrayIndex
+            | ParseReferenceState::ClosePropertySelection => Ok(Self { access }),
             _ => Err(Self::invalid_access()),
         }
     }
@@ -294,7 +336,7 @@ impl FromStr for Reference {
 
 #[cfg(test)]
 mod test {
-    use super::{ArrayExtra, ObjectExtra, Property, Reference};
+    use super::{Access, ArrayIndex, PropertySelection, Reference};
     use crate::jql::error::JqlErrorKind;
     use std::str::FromStr;
 
@@ -307,45 +349,43 @@ mod test {
         assert_eq!(err.kind, JqlErrorKind::InvalidAccess, "source {source:?}");
     }
 
-    fn prop(name: &str, array_extra: ArrayExtra, object_extra: ObjectExtra) -> Property {
-        Property {
-            name: name.to_string(),
-            array_extra,
-            object_extra,
+    fn root() -> Access {
+        Access::PropertyAccess {
+            property: String::new(),
+            properties: PropertySelection::All,
         }
     }
 
-    fn root() -> Property {
-        Property::default()
+    fn prop(name: &str) -> Access {
+        Access::PropertyAccess {
+            property: name.to_string(),
+            properties: PropertySelection::All,
+        }
     }
 
-    #[test]
-    fn root_ref() {
-        // . -> identity over the document
-        assert_eq!(
-            parse("."),
-            Reference {
-                properties: vec![root()],
-            }
-        );
+    fn prop_select(name: &str, keys: &[&str]) -> Access {
+        Access::PropertyAccess {
+            property: name.to_string(),
+            properties: PropertySelection::Properties(
+                keys.iter().map(|k| (*k).to_string()).collect(),
+            ),
+        }
     }
 
-    #[test]
-    fn root_with_extra_ref() {
-        // . -> identity over the document
-        assert_eq!(
-            parse(".{name,age}"),
-            Reference {
-                properties: vec![Property {
-                    name: String::new(),
-                    array_extra: ArrayExtra::All,
-                    object_extra: ObjectExtra::MultipleProperties(vec![
-                        String::from("name"),
-                        String::from("age")
-                    ])
-                }],
-            }
-        );
+    fn index(index: ArrayIndex) -> Access {
+        Access::IndexAccess {
+            index,
+            properties: PropertySelection::All,
+        }
+    }
+
+    fn index_select(index: ArrayIndex, keys: &[&str]) -> Access {
+        Access::IndexAccess {
+            index,
+            properties: PropertySelection::Properties(
+                keys.iter().map(|k| (*k).to_string()).collect(),
+            ),
+        }
     }
 
     #[test]
@@ -354,7 +394,34 @@ mod test {
         assert_eq!(
             parse(".jobs"),
             Reference {
-                properties: vec![root(), prop("jobs", ArrayExtra::All, ObjectExtra::All)],
+                access: vec![root(), prop("jobs")],
+            }
+        );
+    }
+
+    #[test]
+    fn root_ref() {
+        // . -> identity over the document
+        assert_eq!(
+            parse("."),
+            Reference {
+                access: vec![root()],
+            }
+        );
+    }
+
+    #[test]
+    fn root_with_extra_ref() {
+        assert_eq!(
+            parse(".{name,age}"),
+            Reference {
+                access: vec![Access::PropertyAccess {
+                    property: String::new(),
+                    properties: PropertySelection::Properties(vec![
+                        String::from("name"),
+                        String::from("age"),
+                    ]),
+                }],
             }
         );
     }
@@ -365,7 +432,7 @@ mod test {
         assert_eq!(
             parse(".jobs[1]"),
             Reference {
-                properties: vec![root(), prop("jobs", ArrayExtra::Index(1), ObjectExtra::All)],
+                access: vec![root(), prop("jobs"), index(ArrayIndex::Index(1))],
             }
         );
     }
@@ -375,16 +442,13 @@ mod test {
         assert_eq!(
             parse(".jobs[0]"),
             Reference {
-                properties: vec![root(), prop("jobs", ArrayExtra::Index(0), ObjectExtra::All)],
+                access: vec![root(), prop("jobs"), index(ArrayIndex::Index(0))],
             }
         );
         assert_eq!(
             parse(".jobs[10]"),
             Reference {
-                properties: vec![
-                    root(),
-                    prop("jobs", ArrayExtra::Index(10), ObjectExtra::All)
-                ],
+                access: vec![root(), prop("jobs"), index(ArrayIndex::Index(10))],
             }
         );
     }
@@ -395,7 +459,7 @@ mod test {
         assert_eq!(
             parse(".jobs[]"),
             Reference {
-                properties: vec![root(), prop("jobs", ArrayExtra::All, ObjectExtra::All)],
+                access: vec![root(), prop("jobs"), index(ArrayIndex::All)],
             }
         );
     }
@@ -406,13 +470,10 @@ mod test {
         assert_eq!(
             parse(".jobs[1,2]"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop(
-                        "jobs",
-                        ArrayExtra::MultipleIndex(vec![1, 2]),
-                        ObjectExtra::All,
-                    )
+                    prop("jobs"),
+                    index(ArrayIndex::MultipleIndex(vec![1, 2])),
                 ],
             }
         );
@@ -423,26 +484,20 @@ mod test {
         assert_eq!(
             parse(".jobs[0,2]"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop(
-                        "jobs",
-                        ArrayExtra::MultipleIndex(vec![0, 2]),
-                        ObjectExtra::All,
-                    )
+                    prop("jobs"),
+                    index(ArrayIndex::MultipleIndex(vec![0, 2])),
                 ],
             }
         );
         assert_eq!(
             parse(".jobs[0,1,2]"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop(
-                        "jobs",
-                        ArrayExtra::MultipleIndex(vec![0, 1, 2]),
-                        ObjectExtra::All,
-                    )
+                    prop("jobs"),
+                    index(ArrayIndex::MultipleIndex(vec![0, 1, 2])),
                 ],
             }
         );
@@ -454,13 +509,10 @@ mod test {
         assert_eq!(
             parse(".jobs[1:3]"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop(
-                        "jobs",
-                        ArrayExtra::Range { start: 1, end: 3 },
-                        ObjectExtra::All,
-                    )
+                    prop("jobs"),
+                    index(ArrayIndex::Range { start: 1, end: 3 }),
                 ],
             }
         );
@@ -471,26 +523,20 @@ mod test {
         assert_eq!(
             parse(".jobs[0:1]"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop(
-                        "jobs",
-                        ArrayExtra::Range { start: 0, end: 1 },
-                        ObjectExtra::All,
-                    )
+                    prop("jobs"),
+                    index(ArrayIndex::Range { start: 0, end: 1 }),
                 ],
             }
         );
         assert_eq!(
             parse(".jobs[0:0]"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop(
-                        "jobs",
-                        ArrayExtra::Range { start: 0, end: 0 },
-                        ObjectExtra::All,
-                    )
+                    prop("jobs"),
+                    index(ArrayIndex::Range { start: 0, end: 0 }),
                 ],
             }
         );
@@ -501,11 +547,12 @@ mod test {
         assert_eq!(
             parse(".company.teams[0].name"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop("company", ArrayExtra::All, ObjectExtra::All),
-                    prop("teams", ArrayExtra::Index(0), ObjectExtra::All),
-                    prop("name", ArrayExtra::All, ObjectExtra::All),
+                    prop("company"),
+                    prop("teams"),
+                    index(ArrayIndex::Index(0)),
+                    prop("name"),
                 ],
             }
         );
@@ -544,7 +591,7 @@ mod test {
         assert_eq!(
             parse(".person{}"),
             Reference {
-                properties: vec![root(), prop("person", ArrayExtra::All, ObjectExtra::All)],
+                access: vec![root(), prop("person")],
             }
         );
     }
@@ -555,17 +602,7 @@ mod test {
         assert_eq!(
             parse(".person{name,age}"),
             Reference {
-                properties: vec![
-                    root(),
-                    prop(
-                        "person",
-                        ArrayExtra::All,
-                        ObjectExtra::MultipleProperties(vec![
-                            "name".to_string(),
-                            "age".to_string(),
-                        ]),
-                    )
-                ],
+                access: vec![root(), prop_select("person", &["name", "age"])],
             }
         );
     }
@@ -576,7 +613,7 @@ mod test {
         assert_eq!(
             parse(".jobs[]{}"),
             Reference {
-                properties: vec![root(), prop("jobs", ArrayExtra::All, ObjectExtra::All)],
+                access: vec![root(), prop("jobs"), index(ArrayIndex::All)],
             }
         );
     }
@@ -587,16 +624,10 @@ mod test {
         assert_eq!(
             parse(".jobs[]{title,description}"),
             Reference {
-                properties: vec![
+                access: vec![
                     root(),
-                    prop(
-                        "jobs",
-                        ArrayExtra::All,
-                        ObjectExtra::MultipleProperties(vec![
-                            "title".to_string(),
-                            "description".to_string(),
-                        ]),
-                    )
+                    prop("jobs"),
+                    index_select(ArrayIndex::All, &["title", "description"]),
                 ],
             }
         );
