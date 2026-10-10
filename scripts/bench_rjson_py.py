@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Benchmark rs-jq Python bindings (rjson) vs Python's builtin json.
+"""Benchmark rs-jq Python bindings (rjson) vs common Python JSON parsers.
 
 Compares in-process parse throughput of:
-  - json.loads / json.loads (bytes via decode)  — CPython stdlib
-  - rjson.rjson_loads / rjson.rjson_load         — this project's PyO3 binding
+  - json.loads / json.loads(bytes)     — CPython stdlib
+  - orjson.loads                       — orjson (Rust, via PyO3)
+  - ujson.loads                        — ultrajson
+  - rjson.rjson_loads / rjson.rjson_load — this project's PyO3 binding
 
 Build the extension first:
   pip install maturin
   maturin develop --release
 
+Optional deps for the extra parsers:
+  pip install orjson ujson
+
 Examples:
   python3 scripts/bench_rjson_py.py
   python3 scripts/bench_rjson_py.py --size-mb 10 --runs 5
   python3 scripts/bench_rjson_py.py --input path/to/data.json --mode loads
+  python3 scripts/bench_rjson_py.py --only orjson,ujson
 """
 
 from __future__ import annotations
@@ -29,6 +35,8 @@ from typing import Any, Callable, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+PARSER_CHOICES = ("json", "orjson", "ujson", "rjson")
 
 
 # ---------------------------------------------------------------------------
@@ -187,18 +195,27 @@ def print_report(rows: Sequence[BenchStats], mode: str) -> None:
     for row in table:
         print(fmt.format(*row))
 
-    if len(rows) >= 2 and rows[0].walls and rows[1].walls:
-        base, other = rows[0], rows[1]
-        print()
-        print(f"relative to {base.name}:")
-        print(f"  wall time  : {_ratio(other.median(), base.median())}  (>1 = slower)")
-        print(f"  throughput : {_ratio(other.mb_per_s(), base.mb_per_s())}  (>1 = faster)")
+    baseline = next((s for s in rows if s.walls and s.name.startswith("json.")), None)
+    if baseline is None:
+        baseline = next((s for s in rows if s.walls), None)
+    if baseline is not None:
+        others = [s for s in rows if s is not baseline and s.walls]
+        if others:
+            print()
+            print(f"relative to {baseline.name}:")
+            for other in others:
+                print(
+                    f"  {other.name:<24}  wall {_ratio(other.median(), baseline.median())}"
+                    f"  throughput {_ratio(other.mb_per_s(), baseline.mb_per_s())}"
+                    "  (>1 wall = slower, >1 thr = faster)"
+                )
 
     print()
     print("notes:")
-    print("  - Both parsers build a full Python object tree (dict/list/...).")
+    print("  - All parsers build a full Python object tree (dict/list/...).")
     print("  - MB/s uses median wall time over successful runs.")
     print("  - Result is discarded each run (only parse cost is measured).")
+    print("  - orjson prefers bytes input; str path still accepted.")
     print("=" * 72)
 
 
@@ -225,7 +242,7 @@ def _same_shape(a: Any, b: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Import helper
+# Import helpers
 # ---------------------------------------------------------------------------
 
 def import_rjson():
@@ -242,13 +259,51 @@ def import_rjson():
         ) from exc
 
 
+def try_import(name: str, pip_hint: str) -> Any | None:
+    try:
+        return __import__(name)
+    except ImportError:
+        print(
+            f"skip {name}: not installed (pip install {pip_hint})",
+            file=sys.stderr,
+        )
+        return None
+
+
+def parse_only(value: str) -> list[str]:
+    """Parse --only: 'all', legacy 'both', or comma-separated parser names."""
+    value = value.strip().lower()
+    if value in ("all", "both"):
+        # "both" kept for backward compat → all known parsers
+        return list(PARSER_CHOICES)
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError("--only must name at least one parser")
+    bad = [p for p in parts if p not in PARSER_CHOICES]
+    if bad:
+        raise argparse.ArgumentTypeError(
+            f"unknown parser(s): {', '.join(bad)}; "
+            f"choose from {', '.join(PARSER_CHOICES)}, all"
+        )
+    # preserve order, drop duplicates
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Benchmark rjson (rs-jq PyO3) vs Python builtin json.",
+        description=(
+            "Benchmark rjson (rs-jq PyO3) vs Python json / orjson / ujson."
+        ),
     )
     p.add_argument(
         "--input",
@@ -276,14 +331,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--only",
-        choices=("rjson", "json", "both"),
-        default="both",
-        help="which parsers to benchmark (default: both)",
+        type=parse_only,
+        default=list(PARSER_CHOICES),
+        metavar="PARSERS",
+        help=(
+            "parsers to run: all | both | comma-separated from "
+            f"{','.join(PARSER_CHOICES)} (default: all)"
+        ),
     )
     p.add_argument(
         "--verify",
         action="store_true",
-        help="check that rjson and json produce equal Python objects once",
+        help="check that selected parsers produce equal Python object shapes once",
     )
     return p.parse_args(argv)
 
@@ -292,6 +351,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.runs < 1:
         raise SystemExit("--runs must be >= 1")
+
+    selected: list[str] = args.only
 
     if args.input:
         input_path = args.input.expanduser().resolve()
@@ -312,54 +373,90 @@ def main(argv: Sequence[str] | None = None) -> int:
         file=sys.stderr,
     )
 
-    rjson = None
-    if args.only in ("rjson", "both") or args.verify:
-        rjson = import_rjson()
+    modules: dict[str, Any] = {}
+    if "json" in selected:
+        modules["json"] = json
+    if "rjson" in selected:
+        modules["rjson"] = import_rjson()
+    if "orjson" in selected:
+        mod = try_import("orjson", "orjson")
+        if mod is None:
+            if selected == ["orjson"]:
+                raise SystemExit("orjson is required for --only orjson")
+            selected = [p for p in selected if p != "orjson"]
+        else:
+            modules["orjson"] = mod
+    if "ujson" in selected:
+        mod = try_import("ujson", "ujson")
+        if mod is None:
+            if selected == ["ujson"]:
+                raise SystemExit("ujson is required for --only ujson")
+            selected = [p for p in selected if p != "ujson"]
+        else:
+            modules["ujson"] = mod
+
+    if not selected:
+        raise SystemExit("no parsers available to benchmark")
 
     if args.verify:
-        assert rjson is not None
-        a = json.loads(text)
-        b = rjson.rjson_loads(text)
-        c = rjson.rjson_load(raw)
-        # rjson currently maps all numbers to f64, so ints become floats and
-        # float bit-patterns may differ slightly from CPython's parser.
-        if not _same_shape(a, b):
-            raise SystemExit("verify failed: rjson.rjson_loads shape != json.loads")
-        if not _same_shape(a, c):
-            raise SystemExit("verify failed: rjson.rjson_load shape != json.loads")
-        print("verify: ok (same shape; numbers may be float-only)", file=sys.stderr)
+        ref = json.loads(text)
+        checks: list[tuple[str, Any]] = []
+        if "rjson" in modules:
+            checks.append(("rjson.rjson_loads", modules["rjson"].rjson_loads(text)))
+            checks.append(("rjson.rjson_load", modules["rjson"].rjson_load(raw)))
+        if "orjson" in modules:
+            checks.append(("orjson.loads(str)", modules["orjson"].loads(text)))
+            checks.append(("orjson.loads(bytes)", modules["orjson"].loads(raw)))
+        if "ujson" in modules:
+            checks.append(("ujson.loads(str)", modules["ujson"].loads(text)))
+            checks.append(("ujson.loads(bytes)", modules["ujson"].loads(raw)))
+        for label, value in checks:
+            if not _same_shape(ref, value):
+                raise SystemExit(f"verify failed: {label} shape != json.loads")
+        print(
+            f"verify: ok ({len(checks)} parsers; numbers may be float-only)",
+            file=sys.stderr,
+        )
 
     results: list[BenchStats] = []
     modes = ("loads", "load") if args.mode == "both" else (args.mode,)
 
     for mode in modes:
-        if args.only in ("json", "both"):
-            if mode == "loads":
-                fn: Callable[[], Any] = lambda t=text: json.loads(t)
-                label = "json.loads"
+        for name in selected:
+            if name == "json":
+                if mode == "loads":
+                    fn: Callable[[], Any] = lambda t=text: json.loads(t)
+                    label = "json.loads"
+                else:
+                    fn = lambda b=raw: json.loads(b)
+                    label = "json.loads(bytes)"
+            elif name == "orjson":
+                m = modules["orjson"]
+                if mode == "loads":
+                    fn = lambda t=text, mod=m: mod.loads(t)
+                    label = "orjson.loads"
+                else:
+                    fn = lambda b=raw, mod=m: mod.loads(b)
+                    label = "orjson.loads(bytes)"
+            elif name == "ujson":
+                m = modules["ujson"]
+                if mode == "loads":
+                    fn = lambda t=text, mod=m: mod.loads(t)
+                    label = "ujson.loads"
+                else:
+                    fn = lambda b=raw, mod=m: mod.loads(b)
+                    label = "ujson.loads(bytes)"
+            elif name == "rjson":
+                m = modules["rjson"]
+                if mode == "loads":
+                    fn = lambda t=text, mod=m: mod.rjson_loads(t)
+                    label = "rjson.rjson_loads"
+                else:
+                    fn = lambda b=raw, mod=m: mod.rjson_load(b)
+                    label = "rjson.rjson_load"
             else:
-                # stdlib has no loads(bytes) on all versions the same way;
-                # json.loads accepts bytes/bytearray in modern CPython.
-                fn = lambda b=raw: json.loads(b)
-                label = "json.loads(bytes)"
-            results.append(
-                bench(
-                    label,
-                    fn,
-                    input_bytes=input_bytes,
-                    warmup=args.warmup,
-                    runs=args.runs,
-                )
-            )
+                continue
 
-        if args.only in ("rjson", "both"):
-            assert rjson is not None
-            if mode == "loads":
-                fn = lambda t=text, m=rjson: m.rjson_loads(t)
-                label = "rjson.rjson_loads"
-            else:
-                fn = lambda b=raw, m=rjson: m.rjson_load(b)
-                label = "rjson.rjson_load"
             results.append(
                 bench(
                     label,

@@ -5,7 +5,9 @@ use crate::json::{error::JsonError, parser::JsonParser, value::JsonValue};
 pub mod error;
 pub(crate) mod escape;
 pub(crate) mod lexer;
+pub(crate) mod neon;
 pub(crate) mod parser;
+pub(crate) mod simd;
 pub(crate) mod source;
 pub(crate) mod token;
 pub mod value;
@@ -26,7 +28,7 @@ impl Default for JsonDumpOptions {
 }
 
 pub fn json_load(reader: impl Read) -> Result<JsonValue, JsonError> {
-    JsonParser::parse_reader(reader)
+    JsonParser::parse(reader)
 }
 
 pub fn json_dump(

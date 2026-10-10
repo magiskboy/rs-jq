@@ -17,14 +17,8 @@ pub struct JsonParser<R: Read> {
     last_end: usize,
 }
 
-impl<'a> JsonParser<&'a [u8]> {
-    pub fn parse(source: &'a str) -> Result<JsonValue, JsonError> {
-        Self::from_lexer(Lexer::from_str(source))
-    }
-}
-
 impl<R: Read> JsonParser<R> {
-    pub fn parse_reader(reader: R) -> Result<JsonValue, JsonError> {
+    pub fn parse(reader: R) -> Result<JsonValue, JsonError> {
         Self::from_lexer(Lexer::new(reader))
     }
 
@@ -288,13 +282,14 @@ mod test {
     use crate::json::{
         JsonValue,
         error::{ExpectedSyntax, JsonError, JsonErrorKind},
+        lexer::Lexer,
         parser::JsonParser,
         token::JsonTokenKind,
     };
     use std::collections::HashMap;
 
     fn parse(source: &str) -> Result<JsonValue, JsonError> {
-        JsonParser::parse(source)
+        JsonParser::from_lexer(Lexer::from_str(source))
     }
 
     fn string(text: &str) -> JsonValue {

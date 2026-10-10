@@ -8,6 +8,30 @@ use crate::json::{
 };
 use crate::{Location, Span};
 
+/// Arch-specific vectorized byte scan: AVX2 (`simd`) on x86_64, NEON on aarch64.
+mod vector_scan {
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::json::simd::{find_non_whitespace, find_string_special, is_available};
+
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::json::neon::{find_non_whitespace, find_string_special, is_available};
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    pub fn is_available() -> bool {
+        false
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    pub fn find_string_special(_haystack: &[u8]) -> Option<usize> {
+        None
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    pub fn find_non_whitespace(_haystack: &[u8]) -> Option<usize> {
+        None
+    }
+}
+
 #[derive(Debug)]
 pub struct Lexer<R: Read> {
     source: SourceBuffer<R>,
@@ -102,7 +126,7 @@ impl<R: Read> Lexer<R> {
             ']' => self.bump_simple(JsonTokenKind::RBracket),
             ':' => self.bump_simple(JsonTokenKind::Colon),
             ',' => self.bump_simple(JsonTokenKind::Comma),
-            ' ' | '\n' | '\r' | '\t' => self.bump_simple(JsonTokenKind::Whitespace),
+            ' ' | '\n' | '\r' | '\t' => self.bump_whitespace(start_loc),
             '"' => self.parse_string(start_loc),
             't' => self.parse_literal(JsonTokenKind::True, "true", start_loc),
             'f' => self.parse_literal(JsonTokenKind::False, "false", start_loc),
@@ -150,6 +174,45 @@ impl<R: Read> Lexer<R> {
                 end: self.source.position(),
             },
             location,
+        ))
+    }
+
+    /// Consume a run of JSON whitespace. Uses AVX2/NEON byte-scan when available;
+    /// otherwise falls back to one-byte bumps (legacy path).
+    fn bump_whitespace(&mut self, start_loc: Location) -> Result<JsonToken, JsonError> {
+        let start = self.source.position();
+
+        if vector_scan::is_available() {
+            loop {
+                self.source.ensure(1).map_err(Self::io_err)?;
+                let rem = self.source.remaining();
+                if rem.is_empty() {
+                    break;
+                }
+                match vector_scan::find_non_whitespace(rem) {
+                    Some(0) => break,
+                    Some(idx) => {
+                        self.source.bump_n(idx).map_err(Self::io_err)?;
+                        break;
+                    }
+                    None => {
+                        let n = rem.len();
+                        self.source.bump_n(n).map_err(Self::io_err)?;
+                    }
+                }
+            }
+        } else {
+            // Legacy: single whitespace byte (caller may loop via next_significant).
+            self.source.bump_char().map_err(Self::io_err)?;
+        }
+
+        Ok(JsonToken::simple(
+            JsonTokenKind::Whitespace,
+            Span {
+                start,
+                end: self.source.position(),
+            },
+            start_loc,
         ))
     }
 
@@ -321,6 +384,34 @@ impl<R: Read> Lexer<R> {
         self.source.bump_char().map_err(Self::io_err)?; // opening '"'
 
         loop {
+            // Fast path: skip a run of bytes that cannot end/escape the string.
+            // AVX2 (x86_64) / NEON (Apple M); otherwise legacy char-by-char below.
+            if vector_scan::is_available() {
+                self.source.ensure(1).map_err(Self::io_err)?;
+                let rem = self.source.remaining();
+                if rem.is_empty() {
+                    return Err(self.error_at(
+                        JsonErrorKind::UnterminatedString,
+                        Span {
+                            start,
+                            end: self.source.position(),
+                        },
+                        start_loc,
+                    ));
+                }
+                match vector_scan::find_string_special(rem) {
+                    Some(0) => {}
+                    Some(idx) => {
+                        self.source.bump_n(idx).map_err(Self::io_err)?;
+                    }
+                    None => {
+                        let n = rem.len();
+                        self.source.bump_n(n).map_err(Self::io_err)?;
+                        continue;
+                    }
+                }
+            }
+
             let Some(c) = self.source.peek_char().map_err(Self::io_err)? else {
                 return Err(self.error_at(
                     JsonErrorKind::UnterminatedString,

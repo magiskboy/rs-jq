@@ -64,6 +64,17 @@ impl<R: Read> SourceBuffer<R> {
         self.end_abs()
     }
 
+    /// Bytes from the cursor through the end of the current buffer (not yet discarded).
+    pub fn remaining(&self) -> &[u8] {
+        let idx = self.index();
+        &self.buf[idx..]
+    }
+
+    /// Consume `n` bytes at the cursor (must already be buffered).
+    pub fn bump_n(&mut self, n: usize) -> io::Result<()> {
+        self.bump_bytes(n)
+    }
+
     fn end_abs(&self) -> usize {
         self.base + self.buf.len()
     }
