@@ -20,8 +20,8 @@ pub fn jql_parse<'a>(source: &'a str) -> Result<JqlAstNode<'a>, JqlError> {
     JqlParser::parse(&tokens, source)
 }
 
-pub fn jql_execute(value: &JsonValue, query: &str) -> Result<JsonValue, JqlError> {
-    let proxy = Proxy::new(&value);
+pub fn jql_execute<'a>(value: &'a JsonValue<'a>, query: &str) -> Result<JsonValue<'a>, JqlError> {
+    let proxy = Proxy::new(value);
     let ast = jql_parse(query)?;
     let result = Engine::execute(proxy, &ast)?;
     Ok(result.data().clone())
@@ -32,18 +32,19 @@ pub(crate) mod fixture {
     use crate::json::{json_load, value::JsonValue};
 
     /// Shared sample document covering the JQL surface area used by module tests.
-    pub fn sample() -> JsonValue {
+    pub fn sample() -> JsonValue<'static> {
         json_load(include_str!("sample.json").as_bytes())
             .expect("src/jql/sample.json must be valid JSON")
     }
 
-    pub fn at(path: &str) -> JsonValue {
+    pub fn at(path: &str) -> JsonValue<'static> {
         use crate::jql::proxy::Proxy;
         Proxy::new(&sample())
             .get(path)
             .unwrap_or_else(|e| panic!("fixture path {path:?} should resolve: {e}"))
             .data()
             .clone()
+            .into_owned()
     }
 }
 

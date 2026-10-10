@@ -1,9 +1,9 @@
-use std::io::Read;
+use std::borrow::Cow;
 
 use crate::json::{
     error::{JsonError, JsonErrorKind},
     escape::{ESCAPE_TOKENS, MUST_BE_ESCAPED, UnescapeError, unescape_json_string},
-    source::SourceBuffer,
+    source::SliceCursor,
     token::{JsonToken, JsonTokenKind},
 };
 use crate::{Location, Span};
@@ -33,8 +33,8 @@ mod vector_scan {
 }
 
 #[derive(Debug)]
-pub struct Lexer<R: Read> {
-    source: SourceBuffer<R>,
+pub struct Lexer<'a> {
+    source: SliceCursor<'a>,
 }
 
 // support -1.2e-3
@@ -52,17 +52,21 @@ enum ParseNumberState {
     OnSeparator,
 }
 
-impl<'a> Lexer<&'a [u8]> {
-    pub fn from_str(source: &'a str) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn from_slice(data: &'a [u8]) -> Self {
         Self {
-            source: SourceBuffer::from_str(source),
+            source: SliceCursor::new(data),
         }
     }
 
+    pub fn from_str(source: &'a str) -> Self {
+        Self::from_slice(source.as_bytes())
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn tokenize(source: &'a str) -> Result<Vec<JsonToken>, JsonError> {
+    pub fn tokenize(source: &'a str) -> Result<Vec<JsonToken<'a>>, JsonError> {
         let mut lexer = Self::from_str(source);
-        let mut tokens: Vec<JsonToken> = vec![];
+        let mut tokens: Vec<JsonToken<'a>> = vec![];
 
         loop {
             let token = lexer.next_token()?;
@@ -75,14 +79,6 @@ impl<'a> Lexer<&'a [u8]> {
 
         Ok(tokens)
     }
-}
-
-impl<R: Read> Lexer<R> {
-    pub fn new(reader: R) -> Self {
-        Self {
-            source: SourceBuffer::new(reader),
-        }
-    }
 
     pub fn position(&self) -> usize {
         self.source.position()
@@ -93,22 +89,18 @@ impl<R: Read> Lexer<R> {
     }
 
     pub fn discard_consumed(&mut self) {
-        self.source.discard_consumed();
+        // Slice-backed lexer never discards: borrowed string lexemes alias the input.
     }
 
     fn error_at(&self, kind: JsonErrorKind, span: Span, location: Location) -> JsonError {
         JsonError::at(kind, span, location)
     }
 
-    fn io_err(err: std::io::Error) -> JsonError {
-        JsonError::io(err)
-    }
-
-    pub fn next_token(&mut self) -> Result<JsonToken, JsonError> {
+    pub fn next_token(&mut self) -> Result<JsonToken<'a>, JsonError> {
         let start_loc = self.source.location();
         let pos = self.source.position();
 
-        let Some(c) = self.source.peek_char().map_err(Self::io_err)? else {
+        let Some(c) = self.source.peek_char() else {
             return Ok(JsonToken::simple(
                 JsonTokenKind::Stop,
                 Span {
@@ -134,7 +126,7 @@ impl<R: Read> Lexer<R> {
             '0'..='9' | '-' => self.parse_number(start_loc),
             _ => {
                 let start = self.source.position();
-                self.source.bump_char().map_err(Self::io_err)?;
+                self.source.bump_char();
                 Err(self.error_at(
                     JsonErrorKind::InvalidCharacter,
                     Span {
@@ -147,7 +139,7 @@ impl<R: Read> Lexer<R> {
         }
     }
 
-    pub fn next_significant(&mut self) -> Result<JsonToken, JsonError> {
+    pub fn next_significant(&mut self) -> Result<JsonToken<'a>, JsonError> {
         loop {
             let token = self.next_token()?;
             match token.kind {
@@ -163,10 +155,10 @@ impl<R: Read> Lexer<R> {
         }
     }
 
-    fn bump_simple(&mut self, kind: JsonTokenKind) -> Result<JsonToken, JsonError> {
+    fn bump_simple(&mut self, kind: JsonTokenKind) -> Result<JsonToken<'a>, JsonError> {
         let location = self.source.location();
         let start = self.source.position();
-        self.source.bump_char().map_err(Self::io_err)?;
+        self.source.bump_char();
         Ok(JsonToken::simple(
             kind,
             Span {
@@ -179,12 +171,11 @@ impl<R: Read> Lexer<R> {
 
     /// Consume a run of JSON whitespace. Uses AVX2/NEON byte-scan when available;
     /// otherwise falls back to one-byte bumps (legacy path).
-    fn bump_whitespace(&mut self, start_loc: Location) -> Result<JsonToken, JsonError> {
+    fn bump_whitespace(&mut self, start_loc: Location) -> Result<JsonToken<'a>, JsonError> {
         let start = self.source.position();
 
         if vector_scan::is_available() {
             loop {
-                self.source.ensure(1).map_err(Self::io_err)?;
                 let rem = self.source.remaining();
                 if rem.is_empty() {
                     break;
@@ -192,18 +183,18 @@ impl<R: Read> Lexer<R> {
                 match vector_scan::find_non_whitespace(rem) {
                     Some(0) => break,
                     Some(idx) => {
-                        self.source.bump_n(idx).map_err(Self::io_err)?;
+                        self.source.bump_n(idx);
                         break;
                     }
                     None => {
                         let n = rem.len();
-                        self.source.bump_n(n).map_err(Self::io_err)?;
+                        self.source.bump_n(n);
                     }
                 }
             }
         } else {
             // Legacy: single whitespace byte (caller may loop via next_significant).
-            self.source.bump_char().map_err(Self::io_err)?;
+            self.source.bump_char();
         }
 
         Ok(JsonToken::simple(
@@ -221,12 +212,12 @@ impl<R: Read> Lexer<R> {
         token_type: JsonTokenKind,
         expected: &'static str,
         start_loc: Location,
-    ) -> Result<JsonToken, JsonError> {
+    ) -> Result<JsonToken<'a>, JsonError> {
         let start = self.source.position();
         for ch in expected.chars() {
-            match self.source.peek_char().map_err(Self::io_err)? {
+            match self.source.peek_char() {
                 Some(c) if c == ch => {
-                    self.source.bump_char().map_err(Self::io_err)?;
+                    self.source.bump_char();
                 }
                 _ => {
                     return Err(self.error_at(
@@ -246,7 +237,7 @@ impl<R: Read> Lexer<R> {
         }
 
         // Literals must be complete tokens (not prefixes of identifiers).
-        if let Some(next) = self.source.peek_char().map_err(Self::io_err)? {
+        if let Some(next) = self.source.peek_char() {
             if next.is_ascii_alphanumeric() || next == '_' {
                 return Err(self.error_at(
                     JsonErrorKind::InvalidLiteral { expected },
@@ -274,13 +265,13 @@ impl<R: Read> Lexer<R> {
         matches!(int_part.as_bytes(), [b'0', b'0'..=b'9', ..])
     }
 
-    fn parse_number(&mut self, start_loc: Location) -> Result<JsonToken, JsonError> {
+    fn parse_number(&mut self, start_loc: Location) -> Result<JsonToken<'a>, JsonError> {
         let start = self.source.position();
         let mut state = ParseNumberState::Start;
         let mut stopped_on_error = false;
 
         loop {
-            let Some(c) = self.source.peek_char().map_err(Self::io_err)? else {
+            let Some(c) = self.source.peek_char() else {
                 break;
             };
 
@@ -325,13 +316,13 @@ impl<R: Read> Lexer<R> {
             match next_state {
                 ParseNumberState::OnSeparator => break,
                 ParseNumberState::OnError => {
-                    self.source.bump_char().map_err(Self::io_err)?;
+                    self.source.bump_char();
                     stopped_on_error = true;
                     break;
                 }
                 _ => {
                     state = next_state;
-                    self.source.bump_char().map_err(Self::io_err)?;
+                    self.source.bump_char();
                 }
             }
         }
@@ -369,25 +360,19 @@ impl<R: Read> Lexer<R> {
         MUST_BE_ESCAPED.contains(&encoded)
     }
 
-    fn peek_bytes(&mut self, len: usize) -> Result<Option<Vec<u8>>, JsonError> {
-        self.source.ensure(len).map_err(Self::io_err)?;
-        let start = self.source.position();
-        let end = start + len;
-        if end > self.source.buffered_end() {
-            return Ok(None);
-        }
-        Ok(Some(self.source.slice_abs(start, end).to_vec()))
+    fn peek_bytes(&self, len: usize) -> Option<&'a [u8]> {
+        self.source.peek_bytes(len)
     }
 
-    fn parse_string(&mut self, start_loc: Location) -> Result<JsonToken, JsonError> {
+    fn parse_string(&mut self, start_loc: Location) -> Result<JsonToken<'a>, JsonError> {
         let start = self.source.position();
-        self.source.bump_char().map_err(Self::io_err)?; // opening '"'
+        self.source.bump_char(); // opening '"'
+        let mut has_escape = false;
 
         loop {
             // Fast path: skip a run of bytes that cannot end/escape the string.
             // AVX2 (x86_64) / NEON (Apple M); otherwise legacy char-by-char below.
             if vector_scan::is_available() {
-                self.source.ensure(1).map_err(Self::io_err)?;
                 let rem = self.source.remaining();
                 if rem.is_empty() {
                     return Err(self.error_at(
@@ -402,17 +387,17 @@ impl<R: Read> Lexer<R> {
                 match vector_scan::find_string_special(rem) {
                     Some(0) => {}
                     Some(idx) => {
-                        self.source.bump_n(idx).map_err(Self::io_err)?;
+                        self.source.bump_n(idx);
                     }
                     None => {
                         let n = rem.len();
-                        self.source.bump_n(n).map_err(Self::io_err)?;
+                        self.source.bump_n(n);
                         continue;
                     }
                 }
             }
 
-            let Some(c) = self.source.peek_char().map_err(Self::io_err)? else {
+            let Some(c) = self.source.peek_char() else {
                 return Err(self.error_at(
                     JsonErrorKind::UnterminatedString,
                     Span {
@@ -424,21 +409,22 @@ impl<R: Read> Lexer<R> {
             };
 
             if c == '\\' {
+                has_escape = true;
                 let esc_pos = self.source.position();
-                if let Some(bytes) = self.peek_bytes(2)? {
-                    if let Ok(escape) = std::str::from_utf8(&bytes) {
+                if let Some(bytes) = self.peek_bytes(2) {
+                    if let Ok(escape) = std::str::from_utf8(bytes) {
                         if ESCAPE_TOKENS.contains(&escape) {
-                            self.source.bump_char().map_err(Self::io_err)?;
-                            self.source.bump_char().map_err(Self::io_err)?;
+                            self.source.bump_char();
+                            self.source.bump_char();
                             continue;
                         }
                     }
                 }
-                if let Some(bytes) = self.peek_bytes(6)? {
-                    if let Ok(escape) = std::str::from_utf8(&bytes) {
+                if let Some(bytes) = self.peek_bytes(6) {
+                    if let Ok(escape) = std::str::from_utf8(bytes) {
                         if Self::is_hex_escape(escape) {
                             for _ in 0..6 {
-                                self.source.bump_char().map_err(Self::io_err)?;
+                                self.source.bump_char();
                             }
                             continue;
                         }
@@ -446,8 +432,7 @@ impl<R: Read> Lexer<R> {
                 }
 
                 let starts_u = self
-                    .peek_bytes(2)?
-                    .as_deref()
+                    .peek_bytes(2)
                     .and_then(|b| std::str::from_utf8(b).ok())
                     == Some("\\u");
                 if starts_u {
@@ -466,16 +451,22 @@ impl<R: Read> Lexer<R> {
                     start_loc,
                 ));
             } else if c == '"' {
-                self.source.bump_char().map_err(Self::io_err)?;
+                self.source.bump_char();
                 let end = self.source.position();
                 let span = Span { start, end };
                 let raw = std::str::from_utf8(self.source.slice_abs(start + 1, end - 1))
                     .map_err(|_| self.error_at(JsonErrorKind::InvalidEscape, span, start_loc))?;
-                let value = unescape_json_string(raw)
-                    .map_err(|err| self.error_at(Self::unescape_kind(err), span, start_loc))?;
+                let value = if has_escape {
+                    let owned = unescape_json_string(raw)
+                        .map_err(|err| self.error_at(Self::unescape_kind(err), span, start_loc))?;
+                    Cow::Owned(owned)
+                } else {
+                    // Zero-copy: alias the input bytes (no heap String).
+                    Cow::Borrowed(raw)
+                };
                 return Ok(JsonToken::string(span, start_loc, value));
             } else if Self::must_be_escaped(c) {
-                self.source.bump_char().map_err(Self::io_err)?;
+                self.source.bump_char();
                 return Err(self.error_at(
                     JsonErrorKind::UnescapedControl,
                     Span {
@@ -485,7 +476,7 @@ impl<R: Read> Lexer<R> {
                     start_loc,
                 ));
             } else {
-                self.source.bump_char().map_err(Self::io_err)?;
+                self.source.bump_char();
             }
         }
     }
@@ -519,7 +510,7 @@ mod test {
         token::{JsonLexeme, JsonToken, JsonTokenKind},
     };
 
-    fn run(source: &str) -> Result<Vec<JsonToken>, JsonError> {
+    fn run(source: &str) -> Result<Vec<JsonToken<'_>>, JsonError> {
         let tokens = Lexer::tokenize(source)?;
         for token in &tokens {
             println!("{}", token.display());
@@ -527,7 +518,7 @@ mod test {
         Ok(tokens)
     }
 
-    fn tok(kind: JsonTokenKind, start: usize, end: usize) -> JsonToken {
+    fn tok(kind: JsonTokenKind, start: usize, end: usize) -> JsonToken<'static> {
         use crate::Location;
         JsonToken::simple(
             kind,

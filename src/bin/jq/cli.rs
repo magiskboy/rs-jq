@@ -61,10 +61,10 @@ fn load_input(input: &str) -> Result<Box<dyn Read>, AppError> {
     }
 }
 
-fn process(reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue, AppError> {
+fn process(reader: Box<dyn Read>, opts: &Opts) -> Result<JsonValue<'static>, AppError> {
     let json_value = json_load(reader)?;
     let result = jql_execute(&json_value, &opts.script)?;
-    Ok(result)
+    Ok(result.into_owned())
 }
 
 pub fn execute() -> Result<(), AppError> {

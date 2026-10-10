@@ -1,4 +1,5 @@
 use crate::{Location, Span};
+use std::borrow::Cow;
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,23 +62,26 @@ impl JsonTokenKind {
     }
 }
 
-/// Payload carried by string/number tokens so the input buffer can be discarded.
+/// Payload carried by string/number tokens.
+///
+/// String lexemes use [`Cow`]: borrowed from the input when the JSON string has
+/// no escapes; owned only when unescaping is required.
 #[derive(Debug, Clone, PartialEq)]
-pub enum JsonLexeme {
+pub enum JsonLexeme<'a> {
     None,
-    String(String),
+    String(Cow<'a, str>),
     Number(f32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct JsonToken {
+pub struct JsonToken<'a> {
     pub kind: JsonTokenKind,
     pub span: Span,
     pub location: Location,
-    pub lexeme: JsonLexeme,
+    pub lexeme: JsonLexeme<'a>,
 }
 
-impl JsonToken {
+impl<'a> JsonToken<'a> {
     pub fn simple(kind: JsonTokenKind, span: Span, location: Location) -> Self {
         Self {
             kind,
@@ -87,7 +91,7 @@ impl JsonToken {
         }
     }
 
-    pub fn string(span: Span, location: Location, value: String) -> Self {
+    pub fn string(span: Span, location: Location, value: Cow<'a, str>) -> Self {
         Self {
             kind: JsonTokenKind::String,
             span,
@@ -106,22 +110,22 @@ impl JsonToken {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn display(&self) -> JsonTokenDisplay<'_> {
+    pub fn display(&self) -> JsonTokenDisplay<'_, 'a> {
         JsonTokenDisplay { token: self }
     }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone)]
-pub struct JsonTokenDisplay<'a> {
-    pub token: &'a JsonToken,
+pub struct JsonTokenDisplay<'t, 'a> {
+    pub token: &'t JsonToken<'a>,
 }
 
-impl<'a> Display for JsonTokenDisplay<'a> {
+impl<'t, 'a> Display for JsonTokenDisplay<'t, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let content = match &self.token.lexeme {
             JsonLexeme::None => "",
-            JsonLexeme::String(s) => s.as_str(),
+            JsonLexeme::String(s) => s.as_ref(),
             JsonLexeme::Number(_) => "<number>",
         };
         write!(

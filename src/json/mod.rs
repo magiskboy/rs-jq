@@ -27,13 +27,23 @@ impl Default for JsonDumpOptions {
     }
 }
 
-pub fn json_load(reader: impl Read) -> Result<JsonValue, JsonError> {
-    JsonParser::parse(reader)
+pub fn json_load(reader: impl Read) -> Result<JsonValue<'static>, JsonError> {
+    JsonParser::parse_reader(reader)
+}
+
+/// Parse JSON from an in-memory slice with zero-copy string borrows when possible.
+pub fn json_load_slice<'a>(data: &'a [u8]) -> Result<JsonValue<'a>, JsonError> {
+    JsonParser::parse_slice(data)
+}
+
+/// Parse JSON from an in-memory string with zero-copy string borrows when possible.
+pub fn json_load_str<'a>(source: &'a str) -> Result<JsonValue<'a>, JsonError> {
+    JsonParser::parse_str(source)
 }
 
 pub fn json_dump(
     writer: &mut impl std::io::Write,
-    value: &JsonValue,
+    value: &JsonValue<'_>,
     opts: &JsonDumpOptions,
 ) -> Result<(), std::io::Error> {
     dump(value, writer, opts, 0)
@@ -41,7 +51,7 @@ pub fn json_dump(
 
 pub fn json_dumps(
     writer: &mut impl std::fmt::Write,
-    value: &JsonValue,
+    value: &JsonValue<'_>,
     opts: &JsonDumpOptions,
 ) -> std::fmt::Result {
     let mut bytes = Vec::new();
@@ -62,7 +72,7 @@ fn write_indent(
 }
 
 fn dump(
-    value: &JsonValue,
+    value: &JsonValue<'_>,
     writer: &mut impl std::io::Write,
     opts: &JsonDumpOptions,
     depth: usize,
@@ -72,7 +82,7 @@ fn dump(
         JsonValue::True => write!(writer, "true"),
         JsonValue::False => write!(writer, "false"),
         JsonValue::Number(n) => write!(writer, "{}", n),
-        JsonValue::String(st) => write_json_string(writer, st),
+        JsonValue::String(st) => write_json_string(writer, st.as_ref()),
         JsonValue::Array(items) => {
             write!(writer, "[")?;
             if !items.is_empty() {

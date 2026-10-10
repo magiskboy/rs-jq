@@ -16,7 +16,7 @@ use crate::{
 pub struct Engine {}
 
 impl Engine {
-    pub fn execute<'a>(value: Proxy<'a>, path: &'a JqlAstNode<'_>) -> Result<Proxy<'a>, JqlError> {
+    pub fn execute<'a>(value: Proxy<'a>, path: &JqlAstNode<'_>) -> Result<Proxy<'a>, JqlError> {
         match path {
             JqlAstNode::Null
             | JqlAstNode::Boolean(_)
@@ -30,7 +30,7 @@ impl Engine {
         }
     }
 
-    fn literal<'a>(literal: &'a JqlAstNode<'a>) -> Proxy<'a> {
+    fn literal<'a>(literal: &JqlAstNode<'_>) -> Proxy<'a> {
         match literal {
             JqlAstNode::Null => Proxy::owned(JsonValue::Null),
             JqlAstNode::Boolean(val) => Proxy::owned(JsonValue::boolean(*val)),
@@ -40,21 +40,21 @@ impl Engine {
         }
     }
 
-    fn access<'a>(value: Proxy<'a>, path: &'a str) -> Result<Proxy<'a>, JqlError> {
+    fn access<'a>(value: Proxy<'a>, path: &str) -> Result<Proxy<'a>, JqlError> {
         value.get(path)
     }
 
     fn pipe<'a>(
         value: Proxy<'a>,
-        source: &'a JqlAstNode<'a>,
-        dest: &'a JqlAstNode<'a>,
+        source: &JqlAstNode<'_>,
+        dest: &JqlAstNode<'_>,
     ) -> Result<Proxy<'a>, JqlError> {
         Self::execute(value, source).and_then(|r| Self::execute(r, dest))
     }
 
     fn call<'a>(
         name: &str,
-        args: &'a Vec<JqlAstNode<'a>>,
+        args: &[JqlAstNode<'_>],
         value: Proxy<'a>,
     ) -> Result<Proxy<'a>, JqlError> {
         match name {
@@ -65,13 +65,13 @@ impl Engine {
         }
     }
 
-    pub fn len<'a>(value: Proxy<'a>, path: &'a JqlAstNode<'a>) -> Result<Proxy<'a>, JqlError> {
+    pub fn len<'a>(value: Proxy<'a>, path: &JqlAstNode<'_>) -> Result<Proxy<'a>, JqlError> {
         let output = Self::execute(value, path)?;
         let l = output.len()?;
         Ok(Proxy::owned(l))
     }
 
-    pub fn sum<'a>(value: Proxy<'a>, path: &'a JqlAstNode<'a>) -> Result<Proxy<'a>, JqlError> {
+    pub fn sum<'a>(value: Proxy<'a>, path: &JqlAstNode<'_>) -> Result<Proxy<'a>, JqlError> {
         let output = Self::execute(value, path)?;
         match output.data() {
             JsonValue::Array(items) => {
@@ -97,9 +97,9 @@ impl Engine {
     }
 
     pub fn binary<'a>(
-        kind: &'a JqlBinaryKind,
-        left: &'a JqlAstNode<'a>,
-        right: &'a JqlAstNode<'a>,
+        kind: &JqlBinaryKind,
+        left: &JqlAstNode<'_>,
+        right: &JqlAstNode<'_>,
         value: Proxy<'a>,
     ) -> Result<Proxy<'a>, JqlError> {
         let left_proxy = Engine::execute(value.clone(), left)?;
@@ -133,7 +133,7 @@ impl Engine {
         Ok(Proxy::owned(JsonValue::boolean(result)))
     }
 
-    fn filter<'a>(value: Proxy<'a>, predictive: &'a JqlAstNode) -> Result<Proxy<'a>, JqlError> {
+    fn filter<'a>(value: Proxy<'a>, predictive: &JqlAstNode<'_>) -> Result<Proxy<'a>, JqlError> {
         let data = value.data();
         match data {
             JsonValue::Array(items) => {
@@ -164,7 +164,7 @@ fn op_not_support(op: &str) -> JqlError {
     })
 }
 
-fn json_value_type_name(value: &JsonValue) -> &'static str {
+fn json_value_type_name(value: &JsonValue<'_>) -> &'static str {
     match value {
         JsonValue::Null => "null",
         JsonValue::True | JsonValue::False => "boolean",
@@ -184,22 +184,22 @@ mod tests {
     use crate::jql::proxy::Proxy;
     use crate::json::value::JsonValue;
 
-    fn execute(data: &JsonValue, query: &str) -> Result<JsonValue, JqlError> {
+    fn execute(data: &JsonValue<'_>, query: &str) -> Result<JsonValue<'static>, JqlError> {
         let ast = jql_parse(query)?;
-        Engine::execute(Proxy::new(data), &ast).map(|p| p.data().clone())
+        Engine::execute(Proxy::new(data), &ast).map(|p| p.data().clone().into_owned())
     }
 
-    fn assert_ok(data: &JsonValue, query: &str, expected: JsonValue) {
+    fn assert_ok(data: &JsonValue<'_>, query: &str, expected: JsonValue<'static>) {
         let actual =
             execute(data, query).unwrap_or_else(|e| panic!("query {query:?} should succeed: {e}"));
         assert_eq!(actual, expected, "query {query:?}");
     }
 
-    fn assert_err(data: &JsonValue, query: &str) {
+    fn assert_err(data: &JsonValue<'_>, query: &str) {
         assert!(execute(data, query).is_err(), "query {query:?} should fail");
     }
 
-    fn assert_exec_err(data: &JsonValue, query: &str) {
+    fn assert_exec_err(data: &JsonValue<'_>, query: &str) {
         let err = execute(data, query).expect_err(&format!("query {query:?} should fail"));
         assert!(
             matches!(
@@ -214,7 +214,7 @@ mod tests {
         );
     }
 
-    fn bool_cases(data: &JsonValue, cases: &[(&str, bool)]) {
+    fn bool_cases(data: &JsonValue<'_>, cases: &[(&str, bool)]) {
         for &(query, expected) in cases {
             assert_ok(data, query, JsonValue::boolean(expected));
         }

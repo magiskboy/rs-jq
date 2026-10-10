@@ -1,5 +1,7 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Read;
+use std::mem;
 
 use crate::Location;
 use crate::Span;
@@ -10,19 +12,23 @@ use crate::json::{
     value::JsonValue,
 };
 
-pub struct JsonParser<R: Read> {
-    lexer: Lexer<R>,
-    current: JsonToken,
+pub struct JsonParser<'a> {
+    lexer: Lexer<'a>,
+    current: JsonToken<'a>,
     /// Absolute end of the last consumed non-stop token (for EOF diagnostics).
     last_end: usize,
 }
 
-impl<R: Read> JsonParser<R> {
-    pub fn parse(reader: R) -> Result<JsonValue, JsonError> {
-        Self::from_lexer(Lexer::new(reader))
+impl<'a> JsonParser<'a> {
+    pub fn parse_slice(data: &'a [u8]) -> Result<JsonValue<'a>, JsonError> {
+        Self::from_lexer(Lexer::from_slice(data))
     }
 
-    fn from_lexer(mut lexer: Lexer<R>) -> Result<JsonValue, JsonError> {
+    pub fn parse_str(source: &'a str) -> Result<JsonValue<'a>, JsonError> {
+        Self::parse_slice(source.as_bytes())
+    }
+
+    fn from_lexer(mut lexer: Lexer<'a>) -> Result<JsonValue<'a>, JsonError> {
         let first = loop {
             let pos_before = lexer.position();
             let token = lexer.next_token()?;
@@ -57,7 +63,18 @@ impl<R: Read> JsonParser<R> {
         parser.expect_eof()?;
         Ok(value)
     }
+}
 
+impl JsonParser<'_> {
+    /// Buffer the reader, parse with zero-copy borrows, then own any borrowed strings.
+    pub fn parse_reader(mut reader: impl Read) -> Result<JsonValue<'static>, JsonError> {
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).map_err(JsonError::io)?;
+        JsonParser::parse_slice(&buf).map(JsonValue::into_owned)
+    }
+}
+
+impl<'a> JsonParser<'a> {
     fn error(&self, kind: JsonErrorKind, span: Span, location: Location) -> JsonError {
         JsonError::at(kind, span, location)
     }
@@ -92,7 +109,7 @@ impl<R: Read> JsonParser<R> {
         )
     }
 
-    fn expect(&mut self, kind: JsonTokenKind) -> Result<JsonToken, JsonError> {
+    fn expect(&mut self, kind: JsonTokenKind) -> Result<JsonToken<'a>, JsonError> {
         if self.current.kind != kind {
             if self.current.kind == JsonTokenKind::Stop {
                 return Err(self.eof_error(ExpectedSyntax::Token(kind)));
@@ -106,19 +123,24 @@ impl<R: Read> JsonParser<R> {
                 self.current.location,
             ));
         }
-        let token = self.current.clone();
+        let placeholder = JsonToken::simple(
+            JsonTokenKind::Stop,
+            self.current.span,
+            self.current.location,
+        );
+        let token = mem::replace(&mut self.current, placeholder);
         self.bump()?;
         Ok(token)
     }
 
-    fn parse_object(&mut self) -> Result<JsonValue, JsonError> {
+    fn parse_object(&mut self) -> Result<JsonValue<'a>, JsonError> {
         self.expect(JsonTokenKind::LBrace)?;
         if self.current.kind == JsonTokenKind::RBrace {
             self.bump()?;
-            return Ok(JsonValue::object(HashMap::new()));
+            return Ok(JsonValue::empty_object());
         }
 
-        let mut members: Vec<(String, JsonValue)> = vec![];
+        let mut members: Vec<(Cow<'a, str>, JsonValue<'a>)> = vec![];
         loop {
             if self.current.kind != JsonTokenKind::String {
                 if self.current.kind == JsonTokenKind::Stop {
@@ -150,12 +172,12 @@ impl<R: Read> JsonParser<R> {
             }
         }
 
-        Ok(JsonValue::object(HashMap::<String, JsonValue>::from_iter(
+        Ok(JsonValue::object(HashMap::<Cow<'a, str>, JsonValue<'a>>::from_iter(
             members.into_iter(),
         )))
     }
 
-    fn parse_pair(&mut self) -> Result<(String, JsonValue), JsonError> {
+    fn parse_pair(&mut self) -> Result<(Cow<'a, str>, JsonValue<'a>), JsonError> {
         let key_token = self.expect(JsonTokenKind::String)?;
         let key = match key_token.lexeme {
             JsonLexeme::String(s) => s,
@@ -172,14 +194,14 @@ impl<R: Read> JsonParser<R> {
         Ok((key, value))
     }
 
-    fn parse_array(&mut self) -> Result<JsonValue, JsonError> {
+    fn parse_array(&mut self) -> Result<JsonValue<'a>, JsonError> {
         self.expect(JsonTokenKind::LBracket)?;
         if self.current.kind == JsonTokenKind::RBracket {
             self.bump()?;
             return Ok(JsonValue::array(vec![]));
         }
 
-        let mut items: Vec<JsonValue> = vec![];
+        let mut items: Vec<JsonValue<'a>> = vec![];
         loop {
             if !Self::starts_value(&self.current.kind) {
                 if self.current.kind == JsonTokenKind::Stop {
@@ -214,7 +236,7 @@ impl<R: Read> JsonParser<R> {
         Ok(JsonValue::array(items))
     }
 
-    fn parse_value(&mut self) -> Result<JsonValue, JsonError> {
+    fn parse_value(&mut self) -> Result<JsonValue<'a>, JsonError> {
         match self.current.kind {
             JsonTokenKind::Null => {
                 self.bump()?;
@@ -229,19 +251,23 @@ impl<R: Read> JsonParser<R> {
                 Ok(JsonValue::boolean(false))
             }
             JsonTokenKind::String => {
-                let token = self.current.clone();
+                let span = self.current.span;
+                let location = self.current.location;
+                let lexeme = mem::replace(&mut self.current.lexeme, JsonLexeme::None);
                 self.bump()?;
-                match token.lexeme {
+                match lexeme {
                     JsonLexeme::String(s) => Ok(JsonValue::string(s)),
-                    _ => Err(self.error(JsonErrorKind::InvalidEscape, token.span, token.location)),
+                    _ => Err(self.error(JsonErrorKind::InvalidEscape, span, location)),
                 }
             }
             JsonTokenKind::Number => {
-                let token = self.current.clone();
+                let span = self.current.span;
+                let location = self.current.location;
+                let lexeme = mem::replace(&mut self.current.lexeme, JsonLexeme::None);
                 self.bump()?;
-                match token.lexeme {
+                match lexeme {
                     JsonLexeme::Number(n) => Ok(JsonValue::number(n)),
-                    _ => Err(self.error(JsonErrorKind::InvalidNumber, token.span, token.location)),
+                    _ => Err(self.error(JsonErrorKind::InvalidNumber, span, location)),
                 }
             }
             JsonTokenKind::LBracket => self.parse_array(),
@@ -282,32 +308,53 @@ mod test {
     use crate::json::{
         JsonValue,
         error::{ExpectedSyntax, JsonError, JsonErrorKind},
-        lexer::Lexer,
         parser::JsonParser,
         token::JsonTokenKind,
     };
-    use std::collections::HashMap;
+    use std::borrow::Cow;
 
-    fn parse(source: &str) -> Result<JsonValue, JsonError> {
-        JsonParser::from_lexer(Lexer::from_str(source))
+    fn parse(source: &str) -> Result<JsonValue<'_>, JsonError> {
+        JsonParser::parse_str(source)
     }
 
-    fn string(text: &str) -> JsonValue {
-        JsonValue::String(text.to_string())
+    fn string(text: &str) -> JsonValue<'static> {
+        JsonValue::string(text.to_string())
     }
 
-    fn number(n: f32) -> JsonValue {
-        JsonValue::Number(n)
+    fn number(n: f32) -> JsonValue<'static> {
+        JsonValue::number(n)
     }
 
-    fn array(items: Vec<JsonValue>) -> JsonValue {
-        JsonValue::Array(items)
+    fn array(items: Vec<JsonValue<'static>>) -> JsonValue<'static> {
+        JsonValue::array(items)
     }
 
-    fn object(pairs: &[(&str, JsonValue)]) -> JsonValue {
-        JsonValue::Object(HashMap::from_iter(
-            pairs.iter().map(|(k, v)| ((*k).to_string(), v.clone())),
-        ))
+    fn object(pairs: &[(&str, JsonValue<'static>)]) -> JsonValue<'static> {
+        JsonValue::object(
+            pairs
+                .iter()
+                .map(|(k, v)| (Cow::Owned((*k).to_string()), v.clone())),
+        )
+    }
+
+    #[test]
+    fn string_without_escape_is_borrowed() {
+        let source = r#""hello""#;
+        let value = parse(source).unwrap();
+        match value {
+            JsonValue::String(Cow::Borrowed(s)) => assert_eq!(s, "hello"),
+            other => panic!("expected borrowed string, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_with_escape_is_owned() {
+        let source = r#""hel\"lo""#;
+        let value = parse(source).unwrap();
+        match value {
+            JsonValue::String(Cow::Owned(s)) => assert_eq!(s, "hel\"lo"),
+            other => panic!("expected owned string, got {other:?}"),
+        }
     }
 
     #[test]

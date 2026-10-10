@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::{cmp::Ordering, collections::HashMap, fmt::Display};
 
 use crate::Structured;
@@ -27,54 +28,81 @@ pub trait JsonNumber {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum JsonValue {
-    String(String),
+pub enum JsonValue<'a> {
+    String(Cow<'a, str>),
     Number(f32),
     Null,
     True,
     False,
-    Array(Vec<JsonValue>),
-    Object(HashMap<String, JsonValue>),
+    Array(Vec<JsonValue<'a>>),
+    Object(HashMap<Cow<'a, str>, JsonValue<'a>>),
 }
 
-impl Display for JsonValue {
+impl Display for JsonValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let opts = JsonDumpOptions::default();
         json_dumps(f, self, &opts)
     }
 }
 
-impl JsonValue {
-    pub fn null() -> JsonValue {
+impl<'a> JsonValue<'a> {
+    pub fn null() -> Self {
         JsonValue::Null
     }
 
-    pub fn boolean(value: bool) -> JsonValue {
+    pub fn boolean(value: bool) -> Self {
         match value {
             true => JsonValue::True,
             false => JsonValue::False,
         }
     }
 
-    pub fn number(value: f32) -> JsonValue {
+    pub fn number(value: f32) -> Self {
         JsonValue::Number(value)
     }
 
-    pub fn string(value: String) -> JsonValue {
-        JsonValue::String(value)
+    pub fn string(value: impl Into<Cow<'a, str>>) -> Self {
+        JsonValue::String(value.into())
     }
 
-    pub fn array(items: Vec<JsonValue>) -> JsonValue {
+    pub fn array(items: Vec<JsonValue<'a>>) -> Self {
         JsonValue::Array(items)
     }
 
-    pub fn object(items: impl IntoIterator<Item = (String, JsonValue)>) -> JsonValue {
-        let object = items.into_iter().collect();
+    pub fn empty_object() -> Self {
+        JsonValue::Object(HashMap::new())
+    }
+
+    pub fn object<K>(items: impl IntoIterator<Item = (K, JsonValue<'a>)>) -> Self
+    where
+        K: Into<Cow<'a, str>>,
+    {
+        let object = items.into_iter().map(|(k, v)| (k.into(), v)).collect();
         JsonValue::Object(object)
+    }
+
+    /// Copy every borrowed string into an owned `'static` tree.
+    pub fn into_owned(self) -> JsonValue<'static> {
+        match self {
+            JsonValue::String(s) => JsonValue::String(Cow::Owned(s.into_owned())),
+            JsonValue::Number(n) => JsonValue::Number(n),
+            JsonValue::Null => JsonValue::Null,
+            JsonValue::True => JsonValue::True,
+            JsonValue::False => JsonValue::False,
+            JsonValue::Array(items) => {
+                JsonValue::Array(items.into_iter().map(JsonValue::into_owned).collect())
+            }
+            JsonValue::Object(object) => JsonValue::Object(
+                object
+                    .into_iter()
+                    .map(|(k, v)| (Cow::Owned(k.into_owned()), v.into_owned()))
+                    .collect(),
+            ),
+        }
     }
 }
 
-impl JsonOrd for JsonValue {
+impl JsonOrd for JsonValue<'_> {
     type ErrorType = JsonError;
 
     fn try_cmp(&self, other: &Self) -> Result<Ordering, JsonError> {
@@ -91,7 +119,7 @@ impl JsonOrd for JsonValue {
     }
 }
 
-impl JsonLogic for JsonValue {
+impl JsonLogic for JsonValue<'_> {
     type ErrorType = JsonError;
 
     fn try_as_bool(&self) -> Result<bool, JsonError> {
@@ -103,7 +131,7 @@ impl JsonLogic for JsonValue {
     }
 }
 
-impl JsonNumber for JsonValue {
+impl JsonNumber for JsonValue<'_> {
     type ErrorType = JsonError;
 
     fn try_as_int(&self) -> Result<i32, Self::ErrorType> {
@@ -139,7 +167,7 @@ impl JsonNumber for JsonValue {
     }
 }
 
-impl Structured for JsonValue {
+impl<'a> Structured for JsonValue<'a> {
     type ErrorType = JsonError;
 
     fn len(&self) -> Result<usize, JsonError> {
@@ -150,7 +178,7 @@ impl Structured for JsonValue {
         }
     }
 
-    fn get(&self, key: &str) -> Result<&JsonValue, JsonError> {
+    fn get(&self, key: &str) -> Result<&JsonValue<'a>, JsonError> {
         match self {
             JsonValue::Array(items) => {
                 let index = parse_index(key)?;
@@ -170,10 +198,10 @@ impl Structured for JsonValue {
         }
     }
 
-    fn insert(&mut self, key: &str, element: JsonValue) -> Result<(), JsonError> {
+    fn insert(&mut self, key: &str, element: JsonValue<'a>) -> Result<(), JsonError> {
         match self {
             JsonValue::Object(object) => {
-                let _ = object.insert(key.to_string(), element);
+                let _ = object.insert(Cow::Owned(key.to_string()), element);
                 Ok(())
             }
             JsonValue::Array(items) => {
@@ -191,7 +219,7 @@ impl Structured for JsonValue {
         }
     }
 
-    fn push(&mut self, element: JsonValue) -> Result<(), JsonError> {
+    fn push(&mut self, element: JsonValue<'a>) -> Result<(), JsonError> {
         match self {
             JsonValue::Array(items) => {
                 items.push(element);
@@ -202,7 +230,7 @@ impl Structured for JsonValue {
     }
 }
 
-fn json_type(value: &JsonValue) -> JsonType {
+fn json_type(value: &JsonValue<'_>) -> JsonType {
     match value {
         JsonValue::Null => JsonType::Null,
         JsonValue::True | JsonValue::False => JsonType::Boolean,
@@ -213,7 +241,7 @@ fn json_type(value: &JsonValue) -> JsonType {
     }
 }
 
-fn type_mismatch(value: &JsonValue, expected: ExpectedJsonType) -> JsonError {
+fn type_mismatch(value: &JsonValue<'_>, expected: ExpectedJsonType) -> JsonError {
     JsonError::value(JsonErrorKind::TypeMismatch {
         expected,
         found: json_type(value),
@@ -230,6 +258,7 @@ fn parse_index(key: &str) -> Result<usize, JsonError> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::cmp::Ordering;
 
     use super::{JsonLogic, JsonOrd, JsonValue};
@@ -269,7 +298,7 @@ mod tests {
         );
         assert_eq!(
             JsonValue::number(1.0)
-                .try_cmp(&JsonValue::string("a".to_string()))
+                .try_cmp(&JsonValue::string("a"))
                 .unwrap_err()
                 .kind,
             JsonErrorKind::TypeMismatch {
@@ -301,11 +330,8 @@ mod tests {
 
     #[test]
     fn get_reports_missing_key_bad_index_and_type() {
-        let object = JsonValue::object([("name".to_string(), JsonValue::string("a".to_string()))]);
-        assert_eq!(
-            object.get("name").unwrap(),
-            &JsonValue::string("a".to_string())
-        );
+        let object = JsonValue::object([(Cow::Borrowed("name"), JsonValue::string("a"))]);
+        assert_eq!(object.get("name").unwrap(), &JsonValue::string("a"));
         let err = object.get("missing").unwrap_err();
         assert_eq!(err.span, None);
         assert_eq!(
@@ -339,17 +365,10 @@ mod tests {
 
     #[test]
     fn insert_adds_object_keys_and_shifts_array_items() {
-        let mut object = JsonValue::object([]);
-        object
-            .insert("name", JsonValue::string("a".to_string()))
-            .unwrap();
-        object
-            .insert("name", JsonValue::string("b".to_string()))
-            .unwrap();
-        assert_eq!(
-            object.get("name").unwrap(),
-            &JsonValue::string("b".to_string())
-        );
+        let mut object = JsonValue::empty_object();
+        object.insert("name", JsonValue::string("a")).unwrap();
+        object.insert("name", JsonValue::string("b")).unwrap();
+        assert_eq!(object.get("name").unwrap(), &JsonValue::string("b"));
 
         let mut array = JsonValue::array(vec![JsonValue::number(1.0)]);
         array.insert("1", JsonValue::number(2.0)).unwrap();
@@ -384,7 +403,7 @@ mod tests {
     fn len_and_push_require_the_matching_container() {
         let array = JsonValue::array(vec![JsonValue::Null, JsonValue::True]);
         assert_eq!(array.len().unwrap(), 2);
-        assert_eq!(JsonValue::object([]).len().unwrap(), 0);
+        assert_eq!(JsonValue::empty_object().len().unwrap(), 0);
         assert_eq!(
             JsonValue::number(1.0).len().unwrap_err().kind,
             JsonErrorKind::TypeMismatch {
@@ -398,7 +417,7 @@ mod tests {
         assert_eq!(array.len().unwrap(), 1);
 
         assert_eq!(
-            JsonValue::object([])
+            JsonValue::empty_object()
                 .push(JsonValue::Null)
                 .unwrap_err()
                 .kind,
@@ -407,5 +426,19 @@ mod tests {
                 found: JsonType::Object,
             }
         );
+    }
+
+    #[test]
+    fn into_owned_copies_borrowed_strings() {
+        let input = String::from(r#"{"a":"x"}"#);
+        // Simulate borrowed value then drop input after into_owned.
+        let owned = {
+            let borrowed = JsonValue::object([(
+                Cow::Borrowed(&input[2..3]),
+                JsonValue::string(Cow::Borrowed(&input[6..7])),
+            )]);
+            borrowed.into_owned()
+        };
+        assert_eq!(owned.get("a").unwrap(), &JsonValue::string("x"));
     }
 }

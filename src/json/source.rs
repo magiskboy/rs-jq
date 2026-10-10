@@ -212,6 +212,95 @@ impl SourceBuffer<&[u8]> {
     }
 }
 
+/// Cursor over a contiguous byte slice. Enables zero-copy string lexemes
+/// ([`std::borrow::Cow::Borrowed`]) because slices borrow the caller's buffer.
+#[derive(Debug, Clone)]
+pub struct SliceCursor<'a> {
+    data: &'a [u8],
+    pos: usize,
+    line: usize,
+    column: usize,
+}
+
+impl<'a> SliceCursor<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            pos: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
+    pub fn location(&self) -> Location {
+        Location {
+            line: self.line,
+            column: self.column,
+        }
+    }
+
+    pub fn buffered_end(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn remaining(&self) -> &'a [u8] {
+        &self.data[self.pos..]
+    }
+
+    pub fn bump_n(&mut self, n: usize) {
+        let end = (self.pos + n).min(self.data.len());
+        while self.pos < end {
+            let b = self.data[self.pos];
+            self.pos += 1;
+            if b == b'\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
+        }
+    }
+
+    pub fn peek_byte(&self) -> Option<u8> {
+        self.data.get(self.pos).copied()
+    }
+
+    pub fn peek_char(&self) -> Option<char> {
+        let b = self.peek_byte()?;
+        let width = utf8_char_width(b);
+        let end = self.pos + width;
+        if end > self.data.len() {
+            return Some(char::from(b));
+        }
+        std::str::from_utf8(&self.data[self.pos..end])
+            .ok()
+            .and_then(|s| s.chars().next())
+            .or(Some(char::from(b)))
+    }
+
+    pub fn bump_char(&mut self) -> Option<char> {
+        let ch = self.peek_char()?;
+        self.bump_n(ch.len_utf8());
+        Some(ch)
+    }
+
+    pub fn slice_abs(&self, start: usize, end: usize) -> &'a [u8] {
+        &self.data[start..end]
+    }
+
+    pub fn peek_bytes(&self, len: usize) -> Option<&'a [u8]> {
+        let end = self.pos + len;
+        if end > self.data.len() {
+            return None;
+        }
+        Some(&self.data[self.pos..end])
+    }
+}
+
 fn utf8_char_width(first: u8) -> usize {
     if first < 0x80 {
         1

@@ -8,17 +8,17 @@ use crate::json::value::JsonValue;
 
 #[derive(Debug, Clone)]
 pub struct Proxy<'a> {
-    data: Cow<'a, JsonValue>,
+    data: Cow<'a, JsonValue<'a>>,
 }
 
 impl<'a> Proxy<'a> {
-    pub fn new(data: &'a JsonValue) -> Self {
+    pub fn new(data: &'a JsonValue<'a>) -> Self {
         Self {
             data: Cow::Borrowed(data),
         }
     }
 
-    pub fn len(&self) -> Result<JsonValue, JqlError> {
+    pub fn len(&self) -> Result<JsonValue<'a>, JqlError> {
         self.data
             .as_ref()
             .len()
@@ -26,17 +26,17 @@ impl<'a> Proxy<'a> {
             .map_err(JqlError::from)
     }
 
-    pub fn owned(data: JsonValue) -> Self {
+    pub fn owned(data: JsonValue<'a>) -> Self {
         Self {
             data: Cow::Owned(data),
         }
     }
 
-    pub fn data(&self) -> &JsonValue {
+    pub fn data(&self) -> &JsonValue<'a> {
         self.data.as_ref()
     }
 
-    fn type_mismatch(expected: &'static str, found: &JsonValue) -> JqlError {
+    fn type_mismatch(expected: &'static str, found: &JsonValue<'_>) -> JqlError {
         JqlError::without_span(JqlErrorKind::TypeMismatch {
             expected,
             found: match found {
@@ -50,7 +50,7 @@ impl<'a> Proxy<'a> {
         })
     }
 
-    fn slice(value: &JsonValue, start: usize, end: usize) -> Result<JsonValue, JqlError> {
+    fn slice(value: &JsonValue<'a>, start: usize, end: usize) -> Result<JsonValue<'a>, JqlError> {
         match value {
             JsonValue::Array(items) => {
                 if let Some(values) = items.get(start..end) {
@@ -65,7 +65,7 @@ impl<'a> Proxy<'a> {
         }
     }
 
-    fn select(value: &JsonValue, indices: Vec<usize>) -> Result<JsonValue, JqlError> {
+    fn select(value: &JsonValue<'a>, indices: Vec<usize>) -> Result<JsonValue<'a>, JqlError> {
         match value {
             JsonValue::Array(items) => {
                 let values = indices
@@ -84,7 +84,7 @@ impl<'a> Proxy<'a> {
         }
     }
 
-    fn select_keys(value: &JsonValue, keys: &Vec<String>) -> Result<JsonValue, JqlError> {
+    fn select_keys(value: &JsonValue<'a>, keys: &Vec<String>) -> Result<JsonValue<'a>, JqlError> {
         match value {
             JsonValue::Array(items) => {
                 let values = items
@@ -95,8 +95,8 @@ impl<'a> Proxy<'a> {
             }
             JsonValue::Object(m) => {
                 let val = m.iter().filter_map(|(k, v)| {
-                    if keys.contains(k) {
-                        return Some((k.clone(), v.clone()));
+                    if keys.iter().any(|key| key == k.as_ref()) {
+                        Some((k.clone(), v.clone()))
                     } else {
                         None
                     }
@@ -107,7 +107,7 @@ impl<'a> Proxy<'a> {
         }
     }
 
-    fn descend(current: Cow<'a, JsonValue>, key: &str) -> Result<Cow<'a, JsonValue>, JqlError> {
+    fn descend(current: Cow<'a, JsonValue<'a>>, key: &str) -> Result<Cow<'a, JsonValue<'a>>, JqlError> {
         match current {
             Cow::Borrowed(v) => Ok(Cow::Borrowed(v.get(key).map_err(JqlError::from)?)),
             Cow::Owned(v) => Ok(Cow::Owned(v.get(key).map_err(JqlError::from)?.clone())),
@@ -115,9 +115,9 @@ impl<'a> Proxy<'a> {
     }
 
     fn apply_selection(
-        current: Cow<'a, JsonValue>,
+        current: Cow<'a, JsonValue<'a>>,
         properties: PropertySelection,
-    ) -> Result<Cow<'a, JsonValue>, JqlError> {
+    ) -> Result<Cow<'a, JsonValue<'a>>, JqlError> {
         match properties {
             PropertySelection::All => Ok(current),
             PropertySelection::Properties(keys) => {
@@ -175,33 +175,39 @@ mod tests {
     use crate::jql::fixture::{at, sample};
     use crate::json::value::JsonValue;
 
-    fn proxy_get(data: &JsonValue, ref_str: &str) -> Result<JsonValue, JqlError> {
-        Proxy::new(data).get(ref_str).map(|p| p.data().clone())
+    fn proxy_get(data: &JsonValue<'_>, ref_str: &str) -> Result<JsonValue<'static>, JqlError> {
+        Proxy::new(data).get(ref_str).map(|p| p.data().clone().into_owned())
     }
 
-    fn assert_get(data: &JsonValue, ref_str: &str, expected: JsonValue) {
+    fn assert_get(data: &JsonValue<'_>, ref_str: &str, expected: JsonValue<'static>) {
         let actual =
             proxy_get(data, ref_str).unwrap_or_else(|_| panic!("ref {ref_str:?} should succeed"));
         assert_eq!(actual, expected, "ref {ref_str:?}");
     }
 
-    fn assert_get_err(data: &JsonValue, ref_str: &str) {
+    fn assert_get_err(data: &JsonValue<'_>, ref_str: &str) {
         assert!(
             proxy_get(data, ref_str).is_err(),
             "ref {ref_str:?} should fail"
         );
     }
 
-    fn project_keys(value: &JsonValue, keys: &[&str]) -> JsonValue {
+    fn project_keys(value: &JsonValue<'_>, keys: &[&str]) -> JsonValue<'static> {
         match value {
             JsonValue::Object(map) => JsonValue::object(
-                keys.iter()
-                    .filter_map(|k| map.get(*k).map(|v| ((*k).to_string(), v.clone()))),
+                keys.iter().filter_map(|k| {
+                    map.get(*k).map(|v| {
+                        (
+                            std::borrow::Cow::Owned((*k).to_string()),
+                            v.clone().into_owned(),
+                        )
+                    })
+                }),
             ),
             JsonValue::Array(items) => {
                 JsonValue::array(items.iter().map(|item| project_keys(item, keys)).collect())
             }
-            other => other.clone(),
+            other => other.clone().into_owned(),
         }
     }
 
@@ -452,7 +458,7 @@ mod tests {
     fn get_empty_containers() {
         let data = sample();
         assert_get(&data, ".empty.arr", JsonValue::array(vec![]));
-        assert_get(&data, ".empty.obj", JsonValue::object([]));
+        assert_get(&data, ".empty.obj", JsonValue::empty_object());
         assert_get(&data, ".empty.arr[]", JsonValue::array(vec![]));
     }
 }

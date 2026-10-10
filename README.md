@@ -28,15 +28,29 @@ cargo build --features cli
 cargo test
 ```
 
-## Status
+## Benchmarks
 
-Rough notes for now:
+### Python parse (`rjson` vs others)
 
-- JSON parsing works for the basics
-- JQL supports field/index access, pipelines, and some `filter(...)` conditions
-- Not trying to be fully jq-compatible yet
+Full parse into a Python object tree (`dict` / `list` / …).
 
-See `src/json/readme.md` and `src/jql/readme.md` for grammar notes.
+| Parser | median | MB/s | vs `rjson` (wall) |
+|---|---:|---:|---:|
+| `rjson.rjson_loads` | 136 ms | 37 | 1.00× (baseline) |
+| `rjson.rjson_load` | 135 ms | 37 | 1.00× |
+| `json.loads` | 37 ms | 136 | **0.27×** (faster than rjson) |
+| `json.loads(bytes)` | 35 ms | 143 | **0.26×** |
+| `ujson.loads` | 35 ms | 142 | **0.26×** |
+| `ujson.loads(bytes)` | 33 ms | 150 | **0.25×** |
+| `orjson.loads` | 24 ms | 213 | **0.17×** |
+| `orjson.loads(bytes)` | 22 ms | 228 | **0.16×** |
+
+### CLI parse (`rs-jq` vs stock `jq`)
+
+| Tool | median | MB/s | tokens/s | peak RSS | vs `rs-jq` (wall) |
+|---|---:|---:|---:|---:|---:|
+| `rs-jq` (`target/release/jq`) | 190 ms | 26 | 8.1M | ~107 MiB | 1.00× (baseline) |
+| stock `jq` | 300 ms | 17 | 5.1M | ~67 MiB | **1.58×** (slower than rs-jq) |
 
 ## Notable JQL queries
 
